@@ -671,27 +671,43 @@ class WaybackDownloader:
                         href = protocol + path
                         link["href"] = href
                     else:
-                        # Check if it's an email address hidden in an https:// URL
-                        # Pattern: /web/TIMESTAMP/https://domain.com/email@domain.com
-                        mailto_pattern = r"/web/\d+[a-z]*/https?://[^/]+/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})"
-                        mailto_match = re.search(mailto_pattern, href)
-                        if mailto_match:
-                            email = mailto_match.group(1)
-                            href = f"mailto:{email}"
-                            link["href"] = href
-                        else:
-                            # Try regular extraction
-                            original = self._extract_original_url_from_path(href)
-                            if original:
-                                # Check if extracted URL looks like an email address (domain.com/email@domain.com -> mailto:)
-                                if "@" in original and "/" in original and not original.startswith("mailto:"):
-                                    email_part = original.split("/")[-1]
-                                    if "@" in email_part:
-                                        href = f"mailto:{email_part}"
+                        # Check if it's a direct mailto: link in wayback URL
+                        # Handle both relative (/web/TIMESTAMP/mailto:...) and absolute (https://web.archive.org/web/TIMESTAMP/mailto:...)
+                        mailto_direct_patterns = [
+                            r"/web/\d+[a-z]*/(mailto:[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})",
+                            r"https?://web\.archive\.org/web/\d+[a-z]*/(mailto:[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})"
+                        ]
+                        mailto_extracted = False
+                        for pattern in mailto_direct_patterns:
+                            mailto_direct_match = re.search(pattern, href)
+                            if mailto_direct_match:
+                                href = mailto_direct_match.group(1)
+                                link["href"] = href
+                                mailto_extracted = True
+                                break
+                        
+                        if not mailto_extracted:
+                            # Check if it's an email address hidden in an https:// URL
+                            # Pattern: /web/TIMESTAMP/https://domain.com/email@domain.com
+                            mailto_pattern = r"/web/\d+[a-z]*/https?://[^/]+/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})"
+                            mailto_match = re.search(mailto_pattern, href)
+                            if mailto_match:
+                                email = mailto_match.group(1)
+                                href = f"mailto:{email}"
+                                link["href"] = href
+                            else:
+                                # Try regular extraction
+                                original = self._extract_original_url_from_path(href)
+                                if original:
+                                    # Check if extracted URL looks like an email address (domain.com/email@domain.com -> mailto:)
+                                    if "@" in original and "/" in original and not original.startswith("mailto:"):
+                                        email_part = original.split("/")[-1]
+                                        if "@" in email_part:
+                                            href = f"mailto:{email_part}"
+                                            link["href"] = href
+                                    else:
+                                        href = original
                                         link["href"] = href
-                                else:
-                                    href = original
-                                    link["href"] = href
                 # Skip further processing for floating buttons - preserve them
                 continue
             
@@ -727,7 +743,19 @@ class WaybackDownloader:
 
             # Process internal links
             if self.config.make_internal_links_relative:
-                link["href"] = self._make_relative_path(normalized_url)
+                relative_path = self._make_relative_path(normalized_url)
+                # For Python's http.server, ensure .html extension is added for pages without extensions
+                parsed = urlparse(normalized_url)
+                path = parsed.path
+                # Check if this is a page URL (no file extension or ends with /)
+                if not path or path == "/" or path.endswith("/"):
+                    # Root or directory - already handled by _make_relative_path
+                    pass
+                elif not os.path.splitext(path)[1]:  # No file extension
+                    # This is a page URL without extension - add .html for Python http.server
+                    if not relative_path.endswith(".html"):
+                        relative_path = relative_path + ".html"
+                link["href"] = relative_path
             else:
                 if self.config.make_non_www or self.config.make_www:
                     link["href"] = normalized_url
