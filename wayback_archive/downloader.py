@@ -393,6 +393,15 @@ class WaybackDownloader:
                 if normalized_url not in self.config.visited_urls:
                     links_to_follow.append(normalized_url)
 
+        # Process inline styles (background-image, etc.)
+        for element in soup.find_all(style=True):
+            style = element["style"]
+            # Extract URLs from inline styles
+            style_urls = self._extract_css_urls(style, base_url)
+            for style_url in style_urls:
+                if style_url not in self.config.visited_urls and self._is_internal_url(style_url):
+                    links_to_follow.append(style_url)
+
         # Get processed HTML
         processed_html = str(soup)
         processed_html = self._optimize_html(processed_html)
