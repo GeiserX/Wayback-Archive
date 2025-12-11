@@ -56,3 +56,4 @@ class TestCLI:
         # Cleanup
         os.environ.pop("WAYBACK_URL", None)
 
+
