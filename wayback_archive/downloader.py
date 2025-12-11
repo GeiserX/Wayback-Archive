@@ -232,6 +232,30 @@ class WaybackDownloader:
             print(f"Error minifying CSS: {e}")
             return content
 
+    def _extract_css_urls(self, css: str, base_url: str) -> List[str]:
+        """Extract URLs from CSS content."""
+        urls = []
+        
+        # Extract @import URLs
+        import_pattern = r'@import\s+(?:url\()?["\']?([^"\'()]+)["\']?\)?'
+        for match in re.finditer(import_pattern, css, re.IGNORECASE):
+            import_url = match.group(1).strip()
+            normalized = self._normalize_url(import_url, base_url)
+            if normalized not in urls:
+                urls.append(normalized)
+        
+        # Extract url() references (images, fonts, etc.)
+        url_pattern = r'url\s*\(\s*["\']?([^"\'()]+)["\']?\s*\)'
+        for match in re.finditer(url_pattern, css, re.IGNORECASE):
+            css_url = match.group(1).strip()
+            # Skip data URIs and special protocols
+            if not css_url.startswith(("data:", "javascript:", "vbscript:", "#")):
+                normalized = self._normalize_url(css_url, base_url)
+                if normalized not in urls:
+                    urls.append(normalized)
+        
+        return urls
+
     def _optimize_image(self, content: bytes, format: str = "JPEG") -> bytes:
         """Optimize image."""
         if not self.config.optimize_images:
@@ -419,6 +443,13 @@ class WaybackDownloader:
             elif content_type == "text/css":
                 # Process CSS
                 css = content.decode("utf-8", errors="ignore")
+                
+                # Extract URLs from CSS (images, fonts, @import, etc.)
+                css_urls = self._extract_css_urls(css, url)
+                for css_url in css_urls:
+                    if css_url not in self.config.visited_urls and self._is_internal_url(css_url):
+                        queue.append(css_url)
+                
                 css = self._minify_css(css)
 
                 with open(local_path, "w", encoding="utf-8") as f:
