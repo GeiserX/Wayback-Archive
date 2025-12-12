@@ -407,26 +407,43 @@ class WaybackDownloader:
         return f"https://web.archive.org/web/{timestamp}/{url}"
 
     def download_file(self, url: str) -> Optional[bytes]:
-        """Download a file from the given URL.
+        """Download a file from the given URL with timeframe fallback.
         
-        Note: Timeframe fallback is disabled for speed. URLs must include
-        query strings to be found in Wayback Machine.
+        If the file returns 404 at the original timestamp, searches nearby
+        timestamps to find when the file was available.
         """
         # Try original timestamp first
         wayback_url = self._convert_to_wayback_url_with_timestamp(url)
         try:
-            # Always follow redirects - Wayback Machine uses redirects
             response = self.session.get(
-                wayback_url, timeout=30, allow_redirects=True
+                wayback_url, timeout=15, allow_redirects=True
             )
             response.raise_for_status()
             return response.content
         except requests.exceptions.HTTPError as e:
-            pass  # Silently skip 404s and other HTTP errors
+            if hasattr(e, 'response') and e.response is not None and e.response.status_code == 404:
+                # File not found at original timestamp, try nearby timestamps
+                # Use progressively wider search ranges with limited attempts
+                for search_range, step, max_attempts in [(12, 2, 5), (48, 6, 5), (168, 24, 3)]:
+                    timestamps = self._generate_timestamp_variants(
+                        hours_range=search_range, step_hours=step
+                    )
+                    
+                    for timestamp in timestamps[:max_attempts]:
+                        try:
+                            variant_url = self._convert_to_wayback_url_with_timestamp(url, timestamp)
+                            variant_response = self.session.get(
+                                variant_url, timeout=10, allow_redirects=True
+                            )
+                            if variant_response.status_code == 200:
+                                return variant_response.content
+                        except:
+                            continue
+            # Other HTTP errors - skip silently
         except requests.exceptions.Timeout:
-            pass  # Silently skip timeouts
-        except Exception as e:
-            pass  # Silently skip other errors
+            pass
+        except Exception:
+            pass
         
         return None
 
