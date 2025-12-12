@@ -46,5 +46,23 @@ output/
 # Environment
 .env
 .env.local
+.env.*
+*.env
+
+# Secrets and credentials
+secrets/
+credentials/
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_rsa.pub
+*.secret
+*secret*
+*password*
+*token*
+*credential*
+*api_key*
 
 
