@@ -7,12 +7,15 @@ from wayback_archive.downloader import WaybackDownloader
 
 def main():
     """Main CLI entry point."""
+    # Ensure unbuffered output for real-time logging
+    sys.stdout.reconfigure(line_buffering=True) if hasattr(sys.stdout, 'reconfigure') else None
+    
     config = Config()
     
     # Validate configuration
     is_valid, error = config.validate()
     if not is_valid:
-        print(f"Error: {error}", file=sys.stderr)
+        print(f"Error: {error}", file=sys.stderr, flush=True)
         sys.exit(1)
 
     # Create downloader and start

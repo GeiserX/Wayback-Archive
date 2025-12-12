@@ -2,6 +2,7 @@
 
 import os
 import re
+import sys
 import mimetypes
 from datetime import datetime, timedelta
 from urllib.parse import urljoin, urlparse, unquote
@@ -64,6 +65,8 @@ class WaybackDownloader:
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
             }
         )
+        # Track corrupted font files (HTML error pages instead of actual fonts)
+        self.corrupted_fonts: Set[str] = set()
         self._parse_wayback_url()
 
     def _parse_wayback_url(self):
@@ -98,8 +101,25 @@ class WaybackDownloader:
             raise ValueError(f"Invalid Wayback URL format: {self.config.wayback_url}")
 
     def _is_internal_url(self, url: str) -> bool:
-        """Check if URL is internal to the site."""
+        """Check if URL is internal to the site.
+        
+        Returns False for special schemes (tel:, mailto:, javascript:, etc.)
+        """
+        # Skip special URL schemes that shouldn't be downloaded
+        non_downloadable_schemes = (
+            'tel:', 'mailto:', 'javascript:', 'data:', 
+            'ftp:', 'file:', 'sms:', 'whatsapp:', '#'
+        )
+        url_lower = url.lower().strip()
+        if url_lower.startswith(non_downloadable_schemes) or url_lower == '#':
+            return False
+        
         parsed = urlparse(url)
+        
+        # Also check the parsed scheme
+        if parsed.scheme and parsed.scheme.lower() not in ('http', 'https', ''):
+            return False
+        
         url_domain = parsed.netloc.lower().lstrip("www.")
         base_domain = self.config.domain.lower().lstrip("www.")
         return url_domain == base_domain or url_domain == ""
@@ -199,7 +219,8 @@ class WaybackDownloader:
                 return extracted
             
             # Pattern for mailto:/tel:/whatsapp: in wayback URLs
-            wayback_protocol_pattern = r"/web/\d+[a-z]*/(mailto:|tel:|whatsapp:|sms:|callto:)(.+)"
+            # Handle both /web/... and https://web.archive.org/web/...
+            wayback_protocol_pattern = r"(?:https?://web\.archive\.org)?/web/\d+[a-z]*/(mailto:|tel:|whatsapp:|sms:|callto:)(.+)"
             match = re.search(wayback_protocol_pattern, path)
             if match:
                 protocol = match.group(1)
@@ -406,6 +427,25 @@ class WaybackDownloader:
             return f"https://web.archive.org/web/{timestamp}{asset_prefix}/{url}"
         return f"https://web.archive.org/web/{timestamp}/{url}"
 
+    def _is_corrupted_font(self, content: bytes, url: str) -> bool:
+        """Check if a downloaded font file is actually an HTML error page.
+        
+        Wayback Machine sometimes returns HTML error pages instead of font files.
+        This detects those cases.
+        """
+        # Check if it's a font file extension
+        font_extensions = ('.woff', '.woff2', '.ttf', '.eot', '.otf', '.svg')
+        if not any(url.lower().endswith(ext) for ext in font_extensions):
+            return False
+        
+        # Check if content starts with HTML (error page)
+        # HTML typically starts with <!doctype, <html, or <HTML
+        content_start = content[:200].strip()
+        if content_start.startswith((b'<!doctype', b'<!DOCTYPE', b'<html', b'<HTML')):
+            return True
+        
+        return False
+    
     def download_file(self, url: str) -> Optional[bytes]:
         """Download a file from the given URL with timeframe fallback.
         
@@ -419,7 +459,17 @@ class WaybackDownloader:
                 wayback_url, timeout=15, allow_redirects=True
             )
             response.raise_for_status()
-            return response.content
+            content = response.content
+            
+            # Check if font file is corrupted (HTML error page)
+            if self._is_corrupted_font(content, url):
+                # Mark as corrupted and don't return it
+                normalized_url = self._normalize_url(url, self.config.base_url)
+                self.corrupted_fonts.add(normalized_url)
+                print(f"         ⚠️  Font file is corrupted (HTML error page) - will be removed from CSS", flush=True)
+                return None
+            
+            return content
         except requests.exceptions.HTTPError as e:
             if hasattr(e, 'response') and e.response is not None and e.response.status_code == 404:
                 # File not found at original timestamp, try nearby timestamps
@@ -436,7 +486,14 @@ class WaybackDownloader:
                                 variant_url, timeout=10, allow_redirects=True
                             )
                             if variant_response.status_code == 200:
-                                return variant_response.content
+                                content = variant_response.content
+                                # Check if font file is corrupted
+                                if self._is_corrupted_font(content, url):
+                                    normalized_url = self._normalize_url(url, self.config.base_url)
+                                    self.corrupted_fonts.add(normalized_url)
+                                    print(f"         ⚠️  Font file is corrupted (HTML error page) - will be removed from CSS", flush=True)
+                                    continue  # Try next timestamp
+                                return content
                         except:
                             continue
             # Other HTTP errors - skip silently
@@ -446,6 +503,28 @@ class WaybackDownloader:
             pass
         
         return None
+    
+    def _get_file_type_from_url(self, url: str) -> str:
+        """Get a human-readable file type from URL."""
+        parsed = urlparse(url)
+        path = parsed.path.lower()
+        
+        if path.endswith('.html') or path.endswith('.htm') or not os.path.splitext(path)[1]:
+            return "HTML"
+        elif path.endswith('.css'):
+            return "CSS"
+        elif path.endswith('.js') or path.endswith('.mjs'):
+            return "JavaScript"
+        elif any(path.endswith(ext) for ext in ['.woff', '.woff2', '.ttf', '.eot', '.otf', '.svg']):
+            return "Font"
+        elif any(path.endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.ico']):
+            return "Image"
+        elif path.endswith('.json'):
+            return "JSON"
+        elif path.endswith('.xml'):
+            return "XML"
+        else:
+            return "Asset"
 
     def _optimize_html(self, html: str) -> str:
         """Optimize HTML code."""
@@ -474,6 +553,134 @@ class WaybackDownloader:
             print(f"Error minifying JS: {e}")
             return content
 
+    def _check_and_remove_corrupted_fonts_in_css(self, css: str, base_url: str) -> str:
+        """Proactively check font URLs in CSS and detect corrupted ones.
+        
+        This checks font files referenced in CSS to see if they're HTML error pages,
+        even before they're queued for download.
+        """
+        # Find all font URLs in CSS
+        font_url_pattern = r'url\s*\(\s*["\']?([^"\']*\.(?:woff|woff2|ttf|eot|otf|svg))["\']?\s*\)'
+        font_urls = re.findall(font_url_pattern, css, re.IGNORECASE)
+        
+        for font_url in font_urls:
+            # Convert relative URLs to absolute
+            if not font_url.startswith(('http://', 'https://')):
+                # Try to construct absolute URL
+                if font_url.startswith('/'):
+                    # Absolute path from domain
+                    font_url = f"{self.config.base_url.rstrip('/')}{font_url}"
+                else:
+                    # Relative path
+                    font_url = urljoin(base_url, font_url)
+            
+            # Normalize URL
+            normalized_font_url = self._normalize_url(font_url, base_url)
+            
+            # Skip if already in corrupted set
+            if normalized_font_url in self.corrupted_fonts:
+                continue
+            
+            # Try to download and check if corrupted (with quick timeout)
+            try:
+                wayback_url = self._convert_to_wayback_url_with_timestamp(font_url)
+                response = self.session.get(wayback_url, timeout=5, allow_redirects=True)
+                if response.status_code == 200:
+                    if self._is_corrupted_font(response.content, font_url):
+                        self.corrupted_fonts.add(normalized_font_url)
+                        print(f"         ⚠️  Detected corrupted font in CSS: {os.path.basename(font_url)}", flush=True)
+            except Exception as e:
+                # If we can't check, skip - it will be checked when actually downloaded
+                # Don't print errors here to avoid spam
+                pass
+        
+        return css
+    
+    def _remove_corrupted_fonts_from_css(self, css: str) -> str:
+        """Remove references to corrupted font files from CSS.
+        
+        This prevents browsers from trying to load HTML error pages as fonts,
+        which can break typography.
+        """
+        if not self.corrupted_fonts:
+            return css
+        
+        # For each corrupted font, remove its references from CSS
+        for corrupted_font_url in self.corrupted_fonts:
+            # Extract just the filename from the URL
+            parsed = urlparse(corrupted_font_url)
+            font_filename = os.path.basename(parsed.path)
+            # Also get the path relative to domain (for matching in CSS)
+            font_path = parsed.path.lstrip('/')
+            
+            if not font_filename:
+                continue
+            
+            # Remove url() references to this font file
+            # CSS might have relative paths like /templates/.../fontname.ext
+            # We need to match the path as it appears in CSS (usually relative to root)
+            # The font_path is like "templates/shaper_fixter/fonts/fa-brands-400.eot"
+            # But CSS might have "/templates/shaper_fixter/fonts/fa-brands-400.eot"
+            
+            # Try matching with leading slash
+            css_path_with_slash = '/' + font_path
+            # Try matching without leading slash (already handled by font_path)
+            
+            patterns = [
+                # Match full path with leading slash: url(/templates/.../fontname.ext)
+                rf'url\s*\(\s*["\']?[^"\']*{re.escape(css_path_with_slash)}["\']?\s*\)',
+                # Match full path without leading slash
+                rf'url\s*\(\s*["\']?[^"\']*{re.escape(font_path)}["\']?\s*\)',
+                # Match just filename: url(...fontname.ext)
+                rf'url\s*\(\s*["\']?[^"\']*{re.escape(font_filename)}["\']?\s*\)',
+                # Match with format: url(...fontname.ext) format("...")
+                rf'url\s*\(\s*["\']?[^"\']*{re.escape(font_filename)}["\']?\s*\)\s+format\s*\([^)]+\)',
+                # Match with format and full path (with slash)
+                rf'url\s*\(\s*["\']?[^"\']*{re.escape(css_path_with_slash)}["\']?\s*\)\s+format\s*\([^)]+\)',
+                # Match with format and full path (without slash)
+                rf'url\s*\(\s*["\']?[^"\']*{re.escape(font_path)}["\']?\s*\)\s+format\s*\([^)]+\)',
+            ]
+            
+            for pattern in patterns:
+                css = re.sub(pattern, '', css, flags=re.IGNORECASE)
+            
+            # Also remove standalone src:url(...fontname.ext); lines
+            css = re.sub(rf'src:\s*url\s*\(\s*["\']?[^"\']*{re.escape(font_filename)}["\']?\s*\)\s*;', '', css, flags=re.IGNORECASE)
+            css = re.sub(rf'src:\s*url\s*\(\s*["\']?[^"\']*{re.escape(css_path_with_slash)}["\']?\s*\)\s*;', '', css, flags=re.IGNORECASE)
+            css = re.sub(rf'src:\s*url\s*\(\s*["\']?[^"\']*{re.escape(font_path)}["\']?\s*\)\s*;', '', css, flags=re.IGNORECASE)
+        
+        # Clean up any double commas or trailing commas
+        css = re.sub(r',\s*,+', ',', css)  # Multiple commas
+        css = re.sub(r',\s*}', '}', css)  # Trailing comma before }
+        css = re.sub(r'src:\s*,', 'src:', css)  # src: with leading comma
+        css = re.sub(r'src:\s*;', '', css)  # Empty src:;
+        
+        return css
+    
+    def _remove_legacy_font_formats_from_css(self, css: str) -> str:
+        """Remove .eot and .svg font format references from CSS.
+        
+        These legacy formats are often corrupted (HTML error pages) in Wayback Machine,
+        and modern browsers don't need them - they'll use .woff2, .woff, and .ttf.
+        """
+        # Remove .eot references (with or without format)
+        css = re.sub(r',\s*url\s*\(\s*["\']?[^"\']*\.eot["\']?\s*\)\s*(?:format\s*\([^)]+\))?', '', css, flags=re.IGNORECASE)
+        css = re.sub(r'url\s*\(\s*["\']?[^"\']*\.eot["\']?\s*\)\s*(?:format\s*\([^)]+\))?', '', css, flags=re.IGNORECASE)
+        css = re.sub(r'src:\s*url\s*\(\s*["\']?[^"\']*\.eot["\']?\s*\)\s*;', '', css, flags=re.IGNORECASE)
+        
+        # Remove .svg font format references (but keep .svg images)
+        # Only remove if it's in a font context (has format("svg") or in @font-face)
+        css = re.sub(r',\s*url\s*\(\s*["\']?[^"\']*\.svg["\']?\s*\)\s+format\s*\(["\']?svg["\']?\)', '', css, flags=re.IGNORECASE)
+        css = re.sub(r'url\s*\(\s*["\']?[^"\']*\.svg["\']?\s*\)\s+format\s*\(["\']?svg["\']?\)', '', css, flags=re.IGNORECASE)
+        
+        # Clean up any double commas or trailing commas
+        css = re.sub(r',\s*,+', ',', css)  # Multiple commas
+        css = re.sub(r',\s*}', '}', css)  # Trailing comma before }
+        css = re.sub(r'src:\s*,', 'src:', css)  # src: with leading comma
+        css = re.sub(r'src:\s*;', '', css)  # Empty src:;
+        
+        return css
+    
     def _minify_css(self, content: str) -> str:
         """Minify CSS."""
         if not self.config.minify_css:
@@ -817,8 +1024,14 @@ class WaybackDownloader:
                     link["href"] = "#"
                 continue
 
-            # Handle external links (but preserve floating button contact links)
+            # Handle external links (but preserve floating button contact links and contact links when not removing them)
             if not is_internal:
+                # Preserve contact links (tel:, mailto:) when remove_clickable_contacts is False
+                if self._is_contact_link(original_url) and not self.config.remove_clickable_contacts:
+                    # Update href to the extracted URL (removes wayback prefix)
+                    link["href"] = original_url
+                    continue
+                
                 # Don't remove/modify contact links in floating buttons
                 if is_floating_button and self._is_contact_link(original_url):
                     # Keep the original href for floating button contact links
@@ -999,6 +1212,8 @@ class WaybackDownloader:
                 new_style = style
                 for pattern in url_patterns:
                     new_style = re.sub(pattern, replace_url_in_style, new_style, flags=re.IGNORECASE)
+                # Remove references to corrupted fonts from inline styles
+                new_style = self._remove_corrupted_fonts_from_css(new_style)
                 element["style"] = new_style
 
         # Process <style> tags in HTML (not just inline styles)
@@ -1013,6 +1228,8 @@ class WaybackDownloader:
                 
                 # Rewrite URLs in style tag CSS
                 css_content = self._rewrite_css_urls(css_content, base_url)
+                # Remove references to corrupted fonts
+                css_content = self._remove_corrupted_fonts_from_css(css_content)
                 style_tag.string = css_content
 
         # Get processed HTML
@@ -1028,8 +1245,28 @@ class WaybackDownloader:
 
         # Start with the main page
         queue = [self.config.base_url]
+        files_downloaded = 0
+        files_failed = 0
+        files_skipped = 0
+
+        print(f"\n{'='*70}", flush=True)
+        print(f"Wayback-Archive Downloader", flush=True)
+        print(f"{'='*70}", flush=True)
+        print(f"Starting URL: {self.config.base_url}", flush=True)
+        print(f"Output directory: {self.config.output_dir}", flush=True)
+        if self.config.max_files:
+            print(f"⚠️  TEST MODE: Limited to {self.config.max_files} files", flush=True)
+        print(f"{'='*70}\n", flush=True)
 
         while queue:
+            # Check if we've reached the file limit (for testing)
+            if self.config.max_files and files_downloaded >= self.config.max_files:
+                print(f"\n{'='*70}", flush=True)
+                print(f"⚠️  Reached MAX_FILES limit ({self.config.max_files}) - stopping download", flush=True)
+                print(f"{'='*70}", flush=True)
+                break
+            
+            queue_size = len(queue)
             url = queue.pop(0)
             
             # Normalize URL for tracking (remove query strings to avoid downloading same file twice)
@@ -1037,14 +1274,33 @@ class WaybackDownloader:
             normalized_for_tracking = parsed_url._replace(fragment="", query="").geturl()
 
             if normalized_for_tracking in self.config.visited_urls:
+                files_skipped += 1
                 continue
 
-            print(f"Downloading: {url}")
+            # Show status
+            file_type = self._get_file_type_from_url(url)
+            current_file_num = len(self.config.visited_urls) + 1
+            limit_info = f" (limit: {self.config.max_files})" if self.config.max_files else ""
+            print(f"[{current_file_num}{limit_info}] Downloading {file_type}: {url}", flush=True)
+            if queue_size > 1:
+                print(f"         Queue: {queue_size - 1} files remaining", flush=True)
+            
             self.config.visited_urls.add(normalized_for_tracking)
 
             content = self.download_file(url)
             if not content:
+                files_failed += 1
+                print(f"         ⚠️  Failed to download", flush=True)
                 continue
+            
+            # Show file size
+            size_kb = len(content) / 1024
+            if size_kb < 1024:
+                print(f"         ✓ Downloaded ({size_kb:.1f} KB)", flush=True)
+            else:
+                print(f"         ✓ Downloaded ({size_kb/1024:.1f} MB)", flush=True)
+            
+            files_downloaded += 1
 
             # Determine file type with robust detection
             try:
@@ -1113,6 +1369,7 @@ class WaybackDownloader:
                 if is_html:
                     # Process HTML
                     try:
+                        print(f"         Processing HTML and extracting links...", flush=True)
                         # Try to decode as UTF-8, fallback to latin-1 or detect encoding
                         try:
                             html = content.decode("utf-8", errors="strict")
@@ -1124,6 +1381,8 @@ class WaybackDownloader:
                                 html = content.decode("latin-1", errors="ignore")
                         
                         processed_html, new_links = self._process_html(html, url)
+                        if new_links:
+                            print(f"         Found {len(new_links)} new links to download", flush=True)
                     except Exception as e:
                         print(f"Error processing HTML for {url}: {e}")
                         import traceback
@@ -1171,8 +1430,11 @@ class WaybackDownloader:
                         css = content.decode("latin-1", errors="ignore")
                     
                     try:
+                        print(f"         Processing CSS and extracting resources...", flush=True)
                         # Extract URLs from CSS (images, fonts, @import, etc.)
                         css_urls = self._extract_css_urls(css, url)
+                        if css_urls:
+                            print(f"         Found {len(css_urls)} resources in CSS", flush=True)
                         for css_url in css_urls:
                             # Normalize for tracking
                             parsed_css = urlparse(css_url)
@@ -1192,6 +1454,18 @@ class WaybackDownloader:
                         # Rewrite URLs in CSS to relative paths
                         css = self._rewrite_css_urls(css, url)
                         
+                        # Check font URLs in CSS and detect corrupted ones proactively
+                        # This ensures we catch corrupted fonts even if they haven't been downloaded yet
+                        css = self._check_and_remove_corrupted_fonts_in_css(css, url)
+                        
+                        # Remove references to already-detected corrupted fonts
+                        css = self._remove_corrupted_fonts_from_css(css)
+                        
+                        # Proactively remove .eot and .svg font format references
+                        # These are often corrupted (HTML error pages) and modern browsers don't need them
+                        # Browsers will use .woff2, .woff, and .ttf which are more reliable
+                        css = self._remove_legacy_font_formats_from_css(css)
+                        
                         css = self._minify_css(css)
                     except Exception as e:
                         print(f"Warning: Error processing CSS for {url}: {e}")
@@ -1210,8 +1484,11 @@ class WaybackDownloader:
                     # Process JavaScript
                     js = content.decode("utf-8", errors="ignore")
                     
+                    print(f"         Processing JavaScript and extracting URLs...", flush=True)
                     # Extract URLs from JavaScript (may contain fetch, XMLHttpRequest, etc.)
                     js_urls = self._extract_js_urls(js, url)
+                    if js_urls:
+                        print(f"         Found {len(js_urls)} URLs in JavaScript", flush=True)
                     for js_url in js_urls:
                         # Normalize for tracking
                         parsed_js = urlparse(js_url)
@@ -1267,6 +1544,15 @@ class WaybackDownloader:
                 print(f"Error processing {url}: {e}")
                 continue
 
-        print(f"\nDownload complete! Files saved to: {self.config.output_dir}")
-        print(f"Total files downloaded: {len(self.config.downloaded_files)}")
+        print(f"\n{'='*70}", flush=True)
+        print(f"Download Complete!", flush=True)
+        print(f"{'='*70}", flush=True)
+        print(f"Output directory: {self.config.output_dir}", flush=True)
+        print(f"Files successfully downloaded: {files_downloaded}", flush=True)
+        print(f"Files failed: {files_failed}", flush=True)
+        print(f"Files skipped (duplicates): {files_skipped}", flush=True)
+        if self.corrupted_fonts:
+            print(f"Corrupted fonts detected and removed: {len(self.corrupted_fonts)}", flush=True)
+        print(f"Total files processed: {len(self.config.visited_urls)}", flush=True)
+        print(f"{'='*70}\n", flush=True)
 
