@@ -258,9 +258,13 @@ class WaybackDownloader:
         parsed = urlparse(url)
         path = unquote(parsed.path)
         
-        # Remove leading slash
-        if path.startswith("/"):
+        # Remove leading slashes (handle both single and double slashes)
+        while path.startswith("/"):
             path = path[1:]
+        
+        # Clean up any double slashes in the middle of the path
+        while "//" in path:
+            path = path.replace("//", "/")
 
         # Default to index.html for directories
         if not path or path.endswith("/"):
