@@ -173,24 +173,41 @@ class WaybackDownloader:
 
     def _extract_original_url_from_path(self, path: str) -> Optional[str]:
         """Extract original URL from Wayback Machine path in HTML."""
-        if not path:
+        if not path or not isinstance(path, str):
             return None
         
-        # Handle protocol-relative URLs: //web.archive.org/web/...
-        if path.startswith("//"):
-            path = "https:" + path
-        
-        # Pattern: /web/TIMESTAMPim_/https://original.com/path or /web/TIMESTAMPcs_/ or /web/TIMESTAMPjs_/
-        wayback_asset_pattern = r"/web/\d+[a-z]*(?:im_|cs_|js_|jm_)/(https?://[^\"\s'<>\)]+)"
-        match = re.search(wayback_asset_pattern, path)
-        if match:
-            return match.group(1)
-        
-        # Pattern: /web/TIMESTAMP/https://original.com/path
-        wayback_page_pattern = r"/web/\d+[a-z]*/(https?://[^\"\s'<>\)]+)"
-        match = re.search(wayback_page_pattern, path)
-        if match:
-            return match.group(1)
+        try:
+            # Handle protocol-relative URLs: //web.archive.org/web/...
+            if path.startswith("//"):
+                path = "https:" + path
+            
+            # Pattern: /web/TIMESTAMPim_/https://original.com/path or /web/TIMESTAMPcs_/ or /web/TIMESTAMPjs_/ or /web/TIMESTAMPjm_/
+            wayback_asset_pattern = r"/web/\d+[a-z]*(?:im_|cs_|js_|jm_)/(https?://[^\"\s'<>\)]+)"
+            match = re.search(wayback_asset_pattern, path)
+            if match:
+                extracted = match.group(1)
+                # Clean up any trailing characters that might have been captured
+                extracted = extracted.rstrip('.,;:)\'"')
+                return extracted
+            
+            # Pattern: /web/TIMESTAMP/https://original.com/path (for pages)
+            wayback_page_pattern = r"/web/\d+[a-z]*/(https?://[^\"\s'<>\)]+)"
+            match = re.search(wayback_page_pattern, path)
+            if match:
+                extracted = match.group(1)
+                extracted = extracted.rstrip('.,;:)\'"')
+                return extracted
+            
+            # Pattern for mailto:/tel:/whatsapp: in wayback URLs
+            wayback_protocol_pattern = r"/web/\d+[a-z]*/(mailto:|tel:|whatsapp:|sms:|callto:)(.+)"
+            match = re.search(wayback_protocol_pattern, path)
+            if match:
+                protocol = match.group(1)
+                rest = match.group(2).split("?")[0].split("&")[0]  # Remove query params
+                return protocol + rest
+        except Exception as e:
+            # Silently fail - return None if extraction fails
+            pass
         
         return None
 
@@ -226,13 +243,18 @@ class WaybackDownloader:
         elif self.config.make_www and not parsed.netloc.startswith("www.") and parsed.netloc:
             parsed = parsed._replace(netloc="www." + parsed.netloc)
 
-        # Remove fragment for file identification
-        url_without_fragment = parsed._replace(fragment="").geturl()
+        # Remove fragment and query string for file identification
+        # This ensures URLs with different query params or fragments point to the same file
+        url_normalized = parsed._replace(fragment="", query="").geturl()
 
-        return url_without_fragment
+        return url_normalized
 
     def _get_local_path(self, url: str) -> Path:
-        """Get local file path for a URL."""
+        """
+        Get local file path for a URL.
+        This ensures consistent file naming that works with static file servers.
+        Files are saved without query strings or fragments for clean URLs.
+        """
         parsed = urlparse(url)
         path = unquote(parsed.path)
         
@@ -244,11 +266,87 @@ class WaybackDownloader:
         if not path or path.endswith("/"):
             path = "index.html"
 
-        # Add .html extension if no extension
-        if "." not in os.path.basename(path):
-            path = os.path.join(os.path.dirname(path), os.path.basename(path) + ".html")
+        # Determine if this is likely a page (HTML) or an asset
+        # Check if it has a known asset extension
+        known_asset_extensions = {
+            ".css", ".js", ".jpg", ".jpeg", ".png", ".gif", ".svg", ".webp", 
+            ".ico", ".woff", ".woff2", ".ttf", ".eot", ".otf", ".pdf", ".zip",
+            ".mp4", ".mp3", ".avi", ".mov", ".wmv", ".flv", ".pdf", ".doc", ".docx"
+        }
+        
+        has_extension = "." in os.path.basename(path)
+        is_asset = False
+        if has_extension:
+            ext = os.path.splitext(path)[1].lower()
+            is_asset = ext in known_asset_extensions
+
+        # Add .html extension if no extension and it's not an asset (treat as page)
+        if not has_extension and not is_asset:
+            # If the path doesn't have a file extension, treat it as a page
+            dir_part = os.path.dirname(path) if os.path.dirname(path) else ""
+            base_part = os.path.basename(path) if os.path.basename(path) else "index"
+            if dir_part:
+                path = os.path.join(dir_part, base_part + ".html")
+            else:
+                path = base_part + ".html"
 
         return Path(self.config.output_dir) / path
+    
+    def _get_relative_link_path(self, url: str, is_page: bool = True) -> str:
+        """
+        Get relative link path that matches where the file will be saved.
+        This ensures href/src attributes point to the correct file paths.
+        
+        Args:
+            url: The normalized URL to convert
+            is_page: If True, adds .html extension to paths without extensions.
+                     If False, preserves the original extension (for assets).
+        """
+        parsed = urlparse(url)
+        path = unquote(parsed.path)
+        
+        # Keep leading slash for absolute paths from root
+        # Python's http.server handles leading slashes correctly
+        
+        # Default to / for root
+        if not path or path.endswith("/"):
+            return "/"
+        
+        # Determine if this has an asset extension (for better detection)
+        known_asset_extensions = {
+            ".css", ".js", ".jpg", ".jpeg", ".png", ".gif", ".svg", ".webp", 
+            ".ico", ".woff", ".woff2", ".ttf", ".eot", ".otf", ".pdf", ".zip",
+            ".mp4", ".mp3", ".avi", ".mov", ".wmv", ".flv", ".pdf", ".doc", ".docx"
+        }
+        
+        has_extension = "." in os.path.basename(path)
+        is_asset = False
+        if has_extension:
+            ext = os.path.splitext(path)[1].lower()
+            is_asset = ext in known_asset_extensions
+        
+        # For pages without extensions, add .html to match saved file
+        # For assets, preserve original extension
+        # Only add .html if explicitly a page AND has no extension
+        if is_page and not has_extension and not is_asset:
+            # Add .html extension to match saved file
+            path = path + ".html"
+        elif not is_page and not has_extension:
+            # For assets without extension, preserve as-is (let server handle it)
+            pass
+        
+        # Ensure leading slash for absolute paths
+        if not path.startswith("/"):
+            path = "/" + path
+        
+        # Preserve query string and fragment if present
+        # These are preserved in links even though files are saved without them
+        if parsed.query:
+            path += "?" + parsed.query
+        if parsed.fragment:
+            path += "#" + parsed.fragment
+        
+        return path
 
     def _generate_timestamp_variants(self, hours_range: int = 24, step_hours: int = 1) -> List[str]:
         """Generate timestamp variants for timeframe search.
@@ -743,18 +841,8 @@ class WaybackDownloader:
 
             # Process internal links
             if self.config.make_internal_links_relative:
-                relative_path = self._make_relative_path(normalized_url)
-                # For Python's http.server, ensure .html extension is added for pages without extensions
-                parsed = urlparse(normalized_url)
-                path = parsed.path
-                # Check if this is a page URL (no file extension or ends with /)
-                if not path or path == "/" or path.endswith("/"):
-                    # Root or directory - already handled by _make_relative_path
-                    pass
-                elif not os.path.splitext(path)[1]:  # No file extension
-                    # This is a page URL without extension - add .html for Python http.server
-                    if not relative_path.endswith(".html"):
-                        relative_path = relative_path + ".html"
+                # Use _get_relative_link_path to ensure links match saved file paths
+                relative_path = self._get_relative_link_path(normalized_url, is_page=True)
                 link["href"] = relative_path
             else:
                 if self.config.make_non_www or self.config.make_www:
@@ -775,7 +863,8 @@ class WaybackDownloader:
 
             if self._is_internal_url(normalized_url):
                 if self.config.make_internal_links_relative:
-                    img["src"] = self._make_relative_path(normalized_url)
+                    # Images are assets, don't add .html extension
+                    img["src"] = self._get_relative_link_path(normalized_url, is_page=False)
                 else:
                     img["src"] = normalized_url
 
@@ -804,7 +893,8 @@ class WaybackDownloader:
                 continue
 
             if self.config.make_internal_links_relative:
-                link["href"] = self._make_relative_path(normalized_url)
+                # CSS files are assets, preserve extension
+                link["href"] = self._get_relative_link_path(normalized_url, is_page=False)
             else:
                 link["href"] = normalized_url
 
@@ -826,7 +916,8 @@ class WaybackDownloader:
 
             if self._is_internal_url(normalized_url):
                 if self.config.make_internal_links_relative:
-                    script["src"] = self._make_relative_path(normalized_url)
+                    # JavaScript files are assets, preserve extension
+                    script["src"] = self._get_relative_link_path(normalized_url, is_page=False)
                 else:
                     script["src"] = normalized_url
 
@@ -946,64 +1037,140 @@ class WaybackDownloader:
             if not content:
                 continue
 
-            # Determine file type
-            parsed = urlparse(url)
-            content_type, _ = mimetypes.guess_type(url)
-            
-            # Better content type detection from URL
-            if not content_type:
-                if url.endswith(".css") or ".css" in url:
-                    content_type = "text/css"
-                elif url.endswith(".js") or ".js" in url:
-                    content_type = "application/javascript"
-                elif any(ext in url.lower() for ext in [".woff", ".woff2", ".ttf", ".eot", ".otf"]):
-                    content_type = "font/woff2"  # Font file
-                elif any(ext in url.lower() for ext in [".jpg", ".jpeg", ".png", ".gif", ".svg", ".webp", ".ico", ".bmp"]):
-                    content_type = "image/jpeg"  # Default, will be refined
+            # Determine file type with robust detection
+            try:
+                parsed = urlparse(url)
+                content_type, _ = mimetypes.guess_type(parsed.path)
+                
+                # Better content type detection from URL path
+                if not content_type:
+                    path_lower = parsed.path.lower()
+                    # Check for specific extensions
+                    if path_lower.endswith(".css") or "/.css" in path_lower:
+                        content_type = "text/css"
+                    elif path_lower.endswith((".js", ".mjs")) or "/.js" in path_lower:
+                        content_type = "application/javascript"
+                    elif any(path_lower.endswith(ext) for ext in [".woff", ".woff2", ".ttf", ".eot", ".otf"]):
+                        content_type = "font/woff2"  # Font file
+                    elif any(path_lower.endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".gif", ".svg", ".webp", ".ico", ".bmp", ".tiff"]):
+                        content_type = "image/jpeg"  # Default, will be refined from actual content
+                    elif path_lower.endswith(".json"):
+                        content_type = "application/json"
+                    elif path_lower.endswith(".xml"):
+                        content_type = "application/xml"
+                    elif path_lower.endswith(".pdf"):
+                        content_type = "application/pdf"
+                    elif any(path_lower.endswith(ext) for ext in [".mp4", ".webm", ".ogg"]):
+                        content_type = "video/mp4"
+                    elif any(path_lower.endswith(ext) for ext in [".mp3", ".wav", ".ogg"]):
+                        content_type = "audio/mpeg"
+                
+                # Try to detect from actual content if still unknown
+                if not content_type and len(content) > 0:
+                    # Check content signatures
+                    if content.startswith(b'<!DOCTYPE') or content.startswith(b'<html') or content.startswith(b'<HTML'):
+                        content_type = "text/html"
+                    elif content.startswith(b'/*') or content.startswith(b'@charset') or b'@media' in content[:200]:
+                        content_type = "text/css"
+                    elif content.startswith(b'<?xml') or b'<svg' in content[:200]:
+                        content_type = "image/svg+xml"
+                    elif content.startswith(b'\x89PNG'):
+                        content_type = "image/png"
+                    elif content.startswith(b'\xff\xd8\xff'):
+                        content_type = "image/jpeg"
+                    elif content.startswith(b'GIF'):
+                        content_type = "image/gif"
+                    elif content.startswith(b'RIFF') and b'WEBP' in content[:12]:
+                        content_type = "image/webp"
+            except Exception as e:
+                print(f"Warning: Error detecting content type for {url}: {e}")
+                content_type = None
             
             local_path = self._get_local_path(url)
             local_path.parent.mkdir(parents=True, exist_ok=True)
             
             try:
-                # Process based on content type
-                if content_type == "text/html" or url.endswith(".html") or (not content_type and "/" in url and "?" not in url):
+                # Process based on content type - be more conservative about what we treat as HTML
+                is_html = (
+                    content_type == "text/html" or 
+                    (not content_type and (
+                        url.endswith(".html") or 
+                        url.endswith(".htm") or
+                        (parsed.path and not os.path.splitext(parsed.path)[1] and "?" not in url and not any(parsed.path.lower().endswith(ext) for ext in [".css", ".js", ".json", ".xml", ".txt"]))
+                    ))
+                )
+                
+                if is_html:
                     # Process HTML
-                    html = content.decode("utf-8", errors="ignore")
                     try:
+                        # Try to decode as UTF-8, fallback to latin-1 or detect encoding
+                        try:
+                            html = content.decode("utf-8", errors="strict")
+                        except UnicodeDecodeError:
+                            try:
+                                html = content.decode("utf-8", errors="ignore")
+                            except Exception:
+                                # Last resort: try latin-1 which can decode any byte sequence
+                                html = content.decode("latin-1", errors="ignore")
+                        
                         processed_html, new_links = self._process_html(html, url)
                     except Exception as e:
                         print(f"Error processing HTML for {url}: {e}")
                         import traceback
                         traceback.print_exc()
+                        # Still save the raw HTML if processing fails
+                        try:
+                            with open(local_path, "wb") as f:
+                                f.write(content)
+                            self.config.downloaded_files[url] = str(local_path)
+                        except Exception as save_error:
+                            print(f"Error saving file {local_path}: {save_error}")
                         continue
 
                     # Save HTML
-                    with open(local_path, "w", encoding="utf-8") as f:
-                        f.write(processed_html)
+                    try:
+                        with open(local_path, "w", encoding="utf-8", errors="replace") as f:
+                            f.write(processed_html)
+                        self.config.downloaded_files[url] = str(local_path)
+                    except Exception as e:
+                        print(f"Error saving HTML to {local_path}: {e}")
+                        continue
 
-                    # Add new links to queue
-                    queue.extend(new_links)
-                    self.config.downloaded_files[url] = str(local_path)
+                    # Add new links to queue (deduplicate)
+                    for link_url in new_links:
+                        if link_url not in self.config.visited_urls and link_url not in queue:
+                            queue.append(link_url)
 
                 elif content_type == "text/css":
                     # Process CSS
-                    css = content.decode("utf-8", errors="ignore")
+                    try:
+                        css = content.decode("utf-8", errors="ignore")
+                    except Exception:
+                        css = content.decode("latin-1", errors="ignore")
                     
-                    # Extract URLs from CSS (images, fonts, @import, etc.)
-                    css_urls = self._extract_css_urls(css, url)
-                    for css_url in css_urls:
-                        if css_url not in self.config.visited_urls and self._is_internal_url(css_url):
-                            queue.append(css_url)
-                    
-                    # Rewrite URLs in CSS to relative paths
-                    css = self._rewrite_css_urls(css, url)
-                    
-                    css = self._minify_css(css)
+                    try:
+                        # Extract URLs from CSS (images, fonts, @import, etc.)
+                        css_urls = self._extract_css_urls(css, url)
+                        for css_url in css_urls:
+                            if css_url not in self.config.visited_urls and css_url not in queue and self._is_internal_url(css_url):
+                                queue.append(css_url)
+                        
+                        # Rewrite URLs in CSS to relative paths
+                        css = self._rewrite_css_urls(css, url)
+                        
+                        css = self._minify_css(css)
+                    except Exception as e:
+                        print(f"Warning: Error processing CSS for {url}: {e}")
+                        # Use original content if processing fails
+                        css = content.decode("utf-8", errors="ignore")
 
-                    with open(local_path, "w", encoding="utf-8") as f:
-                        f.write(css)
-
-                    self.config.downloaded_files[url] = str(local_path)
+                    try:
+                        with open(local_path, "w", encoding="utf-8", errors="replace") as f:
+                            f.write(css)
+                        self.config.downloaded_files[url] = str(local_path)
+                    except Exception as e:
+                        print(f"Error saving CSS to {local_path}: {e}")
+                        continue
 
                 elif content_type in ("application/javascript", "text/javascript"):
                     # Process JavaScript
