@@ -720,6 +720,13 @@ class WaybackDownloader:
                 original = self._extract_original_url_from_path(css_url)
                 if original:
                     css_url = original
+                # Convert relative paths to absolute URLs using base_url
+                # This is critical for font files referenced with relative paths in CSS
+                if css_url.startswith("/") and not css_url.startswith("//"):
+                    # Absolute path from domain root - construct full URL
+                    from urllib.parse import urljoin
+                    parsed_base = urlparse(base_url)
+                    css_url = f"{parsed_base.scheme}://{parsed_base.netloc}{css_url}"
                 normalized = self._normalize_url(css_url, base_url)
                 if normalized not in urls:
                     urls.append(normalized)

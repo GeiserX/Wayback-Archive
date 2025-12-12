@@ -62,8 +62,12 @@ class Config:
         self.keep_redirections: bool = get_bool_env("KEEP_REDIRECTIONS", False)
 
         # Download limit (for testing - set MAX_FILES to limit downloads)
+        # If MAX_FILES is not set, downloads are unlimited
         max_files_str = get_str_env("MAX_FILES")
-        self.max_files: Optional[int] = int(max_files_str) if max_files_str and max_files_str.isdigit() else None
+        if max_files_str and max_files_str.strip().isdigit():
+            self.max_files: Optional[int] = int(max_files_str.strip())
+        else:
+            self.max_files: Optional[int] = None  # Unlimited downloads
 
         # Internal state
         self.base_url: Optional[str] = None
