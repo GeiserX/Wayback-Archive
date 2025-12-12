@@ -1,6 +1,6 @@
 requests>=2.31.0
 beautifulsoup4>=4.12.0
-htmlmin>=0.1.12
+minify-html>=0.18.0
 cssmin>=0.2.0
 rjsmin>=1.2.2
 Pillow>=10.0.0

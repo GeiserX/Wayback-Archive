@@ -403,53 +403,26 @@ class WaybackDownloader:
         return f"https://web.archive.org/web/{timestamp}/{url}"
 
     def download_file(self, url: str) -> Optional[bytes]:
-        """Download a file from the given URL with timeframe fallback.
+        """Download a file from the given URL.
         
-        If the file returns 404, tries nearby timestamps (hours before/after).
-        Expands search window if still not found.
+        Note: Timeframe fallback is disabled for speed. URLs must include
+        query strings to be found in Wayback Machine.
         """
         # Try original timestamp first
         wayback_url = self._convert_to_wayback_url_with_timestamp(url)
         try:
+            # Always follow redirects - Wayback Machine uses redirects
             response = self.session.get(
-                wayback_url, timeout=30, allow_redirects=self.config.keep_redirections
+                wayback_url, timeout=30, allow_redirects=True
             )
             response.raise_for_status()
             return response.content
         except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 404:
-                # File not found, try timeframe fallback
-                print(f"File not found at original timestamp, searching nearby timestamps for {url}...")
-                
-                # Start with small range and expand
-                found = False
-                for search_range in [6, 24, 72, 168]:  # 6h, 24h, 3d, 1w
-                    timestamps = self._generate_timestamp_variants(hours_range=search_range, step_hours=max(1, search_range // 12))
-                    
-                    for timestamp in timestamps[:10]:  # Limit to 10 closest variants per range
-                        try:
-                            variant_url = self._convert_to_wayback_url_with_timestamp(url, timestamp)
-                            variant_response = self.session.get(
-                                variant_url, timeout=30, allow_redirects=self.config.keep_redirections
-                            )
-                            if variant_response.status_code == 200:
-                                print(f"  Found at timestamp {timestamp} (offset: {(datetime.strptime(timestamp, '%Y%m%d%H%M%S') - self.original_datetime).total_seconds() / 3600:.1f}h)")
-                                found = True
-                                return variant_response.content
-                        except requests.exceptions.RequestException:
-                            continue
-                    
-                    # If found in this range, break outer loop
-                    if found:
-                        break
-                
-                if not found:
-                    print(f"  Could not find {url} in nearby timeframes")
-            else:
-                # Other HTTP error
-                print(f"Error downloading {url}: {e}")
+            pass  # Silently skip 404s and other HTTP errors
+        except requests.exceptions.Timeout:
+            pass  # Silently skip timeouts
         except Exception as e:
-            print(f"Error downloading {url}: {e}")
+            pass  # Silently skip other errors
         
         return None
 
@@ -459,16 +432,10 @@ class WaybackDownloader:
             return html
 
         try:
-            import htmlmin
-
-            return htmlmin.minify(
-                html,
-                remove_comments=True,
-                remove_empty_space=True,
-                remove_all_empty_space=False,
-                reduce_empty_attributes=True,
-                reduce_boolean_attributes=True,
-            )
+            import minify_html
+            # minify-html is a Python 3.14+ compatible alternative to htmlmin
+            # minify_html.minify() expects a string, not bytes
+            return minify_html.minify(html, minify_js=False, minify_css=False)
         except Exception as e:
             print(f"Error optimizing HTML: {e}")
             return html
@@ -813,10 +780,16 @@ class WaybackDownloader:
             original = self._extract_original_url_from_path(href)
             if original:
                 href = original
-            normalized_url = self._normalize_url(href, base_url)
+            # Keep original URL with query strings for downloading - normalize later for file paths
+            original_url = href
+            # Normalize only for checking if internal/external
+            parsed_original = urlparse(original_url)
+            normalized_for_check = parsed_original._replace(fragment="", query="").geturl()
+            # Check if internal using normalized version
+            is_internal = self._is_internal_url(normalized_for_check)
 
             # Handle contact links (but preserve floating buttons - already handled above)
-            if self.config.remove_clickable_contacts and self._is_contact_link(href) and not is_floating_button:
+            if self.config.remove_clickable_contacts and self._is_contact_link(original_url) and not is_floating_button:
                 if self.config.remove_external_links_remove_anchors:
                     link.decompose()
                 else:
@@ -824,9 +797,9 @@ class WaybackDownloader:
                 continue
 
             # Handle external links (but preserve floating button contact links)
-            if not self._is_internal_url(normalized_url):
+            if not is_internal:
                 # Don't remove/modify contact links in floating buttons
-                if is_floating_button and self._is_contact_link(href):
+                if is_floating_button and self._is_contact_link(original_url):
                     # Keep the original href for floating button contact links
                     continue
                 
@@ -839,7 +812,8 @@ class WaybackDownloader:
                     link.replace_with(text)
                 continue
 
-            # Process internal links
+            # Process internal links - normalize for final HTML output
+            normalized_url = self._normalize_url(original_url, base_url)
             if self.config.make_internal_links_relative:
                 # Use _get_relative_link_path to ensure links match saved file paths
                 relative_path = self._get_relative_link_path(normalized_url, is_page=True)
@@ -848,9 +822,10 @@ class WaybackDownloader:
                 if self.config.make_non_www or self.config.make_www:
                     link["href"] = normalized_url
 
-            # Add to links to follow
+            # Add to links to follow - use original URL with query strings for downloading
+            # Track by normalized URL to avoid downloading same file multiple times
             if normalized_url not in self.config.visited_urls:
-                links_to_follow.append(normalized_url)
+                links_to_follow.append(original_url)
 
         # Process images
         for img in soup.find_all("img", src=True):
@@ -859,6 +834,9 @@ class WaybackDownloader:
             original = self._extract_original_url_from_path(src)
             if original:
                 src = original
+            # Keep original URL with query strings for downloading
+            original_url = src
+            # Normalize for checking and final output
             normalized_url = self._normalize_url(src, base_url)
 
             if self._is_internal_url(normalized_url):
@@ -869,7 +847,7 @@ class WaybackDownloader:
                     img["src"] = normalized_url
 
                 if normalized_url not in self.config.visited_urls:
-                    links_to_follow.append(normalized_url)
+                    links_to_follow.append(original_url)
 
         # Process CSS links
         for link in soup.find_all("link", rel="stylesheet", href=True):
@@ -880,6 +858,9 @@ class WaybackDownloader:
             original = self._extract_original_url_from_path(href)
             if original:
                 href = original
+            # Keep original URL with query strings for downloading
+            original_url = href
+            # Normalize for checking and final output
             normalized_url = self._normalize_url(href, base_url)
 
             # Handle external links (e.g., Google Fonts)
@@ -899,7 +880,7 @@ class WaybackDownloader:
                 link["href"] = normalized_url
 
             if normalized_url not in self.config.visited_urls:
-                links_to_follow.append(normalized_url)
+                links_to_follow.append(original_url)
 
         # Process script tags
         for script in soup.find_all("script", src=True):
@@ -912,6 +893,9 @@ class WaybackDownloader:
             original = self._extract_original_url_from_path(src)
             if original:
                 src = original
+            # Keep original URL with query strings for downloading
+            original_url = src
+            # Normalize for checking and final output
             normalized_url = self._normalize_url(src, base_url)
 
             if self._is_internal_url(normalized_url):
@@ -922,7 +906,7 @@ class WaybackDownloader:
                     script["src"] = normalized_url
 
                 if normalized_url not in self.config.visited_urls:
-                    links_to_follow.append(normalized_url)
+                    links_to_follow.append(original_url)
 
         # Process other link tags (favicon, etc.) - but skip stylesheets as they're handled above
         for link in soup.find_all("link", href=True):
@@ -1026,12 +1010,16 @@ class WaybackDownloader:
 
         while queue:
             url = queue.pop(0)
+            
+            # Normalize URL for tracking (remove query strings to avoid downloading same file twice)
+            parsed_url = urlparse(url)
+            normalized_for_tracking = parsed_url._replace(fragment="", query="").geturl()
 
-            if url in self.config.visited_urls:
+            if normalized_for_tracking in self.config.visited_urls:
                 continue
 
             print(f"Downloading: {url}")
-            self.config.visited_urls.add(url)
+            self.config.visited_urls.add(normalized_for_tracking)
 
             content = self.download_file(url)
             if not content:
@@ -1086,7 +1074,8 @@ class WaybackDownloader:
                 print(f"Warning: Error detecting content type for {url}: {e}")
                 content_type = None
             
-            local_path = self._get_local_path(url)
+            # Use normalized URL (without query strings) for file paths
+            local_path = self._get_local_path(normalized_for_tracking)
             local_path.parent.mkdir(parents=True, exist_ok=True)
             
             try:
@@ -1138,8 +1127,20 @@ class WaybackDownloader:
 
                     # Add new links to queue (deduplicate)
                     for link_url in new_links:
-                        if link_url not in self.config.visited_urls and link_url not in queue:
-                            queue.append(link_url)
+                        # Normalize for tracking (to avoid downloading same file multiple times)
+                        parsed_link = urlparse(link_url)
+                        normalized_link = parsed_link._replace(fragment="", query="").geturl()
+                        if normalized_link not in self.config.visited_urls:
+                            # Check if already in queue (normalize queue items too)
+                            in_queue = False
+                            for q_url in queue:
+                                parsed_q = urlparse(q_url)
+                                normalized_q = parsed_q._replace(fragment="", query="").geturl()
+                                if normalized_q == normalized_link:
+                                    in_queue = True
+                                    break
+                            if not in_queue:
+                                queue.append(link_url)
 
                 elif content_type == "text/css":
                     # Process CSS
@@ -1152,8 +1153,20 @@ class WaybackDownloader:
                         # Extract URLs from CSS (images, fonts, @import, etc.)
                         css_urls = self._extract_css_urls(css, url)
                         for css_url in css_urls:
-                            if css_url not in self.config.visited_urls and css_url not in queue and self._is_internal_url(css_url):
-                                queue.append(css_url)
+                            # Normalize for tracking
+                            parsed_css = urlparse(css_url)
+                            normalized_css = parsed_css._replace(fragment="", query="").geturl()
+                            if normalized_css not in self.config.visited_urls and self._is_internal_url(css_url):
+                                # Check if already in queue
+                                in_queue = False
+                                for q_url in queue:
+                                    parsed_q = urlparse(q_url)
+                                    normalized_q = parsed_q._replace(fragment="", query="").geturl()
+                                    if normalized_q == normalized_css:
+                                        in_queue = True
+                                        break
+                                if not in_queue:
+                                    queue.append(css_url)
                         
                         # Rewrite URLs in CSS to relative paths
                         css = self._rewrite_css_urls(css, url)
@@ -1179,8 +1192,20 @@ class WaybackDownloader:
                     # Extract URLs from JavaScript (may contain fetch, XMLHttpRequest, etc.)
                     js_urls = self._extract_js_urls(js, url)
                     for js_url in js_urls:
-                        if js_url not in self.config.visited_urls and self._is_internal_url(js_url):
-                            queue.append(js_url)
+                        # Normalize for tracking
+                        parsed_js = urlparse(js_url)
+                        normalized_js = parsed_js._replace(fragment="", query="").geturl()
+                        if normalized_js not in self.config.visited_urls and self._is_internal_url(js_url):
+                            # Check if already in queue
+                            in_queue = False
+                            for q_url in queue:
+                                parsed_q = urlparse(q_url)
+                                normalized_q = parsed_q._replace(fragment="", query="").geturl()
+                                if normalized_q == normalized_js:
+                                    in_queue = True
+                                    break
+                            if not in_queue:
+                                queue.append(js_url)
                     
                     js = self._minify_js(js)
 
