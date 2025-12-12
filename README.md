@@ -121,6 +121,46 @@ REM Open http://localhost:8000 in your browser
 6. **Timeframe Fallback**: If a resource returns 404, searches nearby timestamps
 7. **URL Rewriting**: Converts all links to relative paths for local serving
 
+## Testing
+
+Run tests:
+```bash
+pytest
+```
+
+## Troubleshooting
+
+### Port Already in Use
+
+If the Python HTTP server fails to start because port 8000 is in use, use a different port:
+
+```bash
+python -m http.server 8080
+```
+
+### Font Loading Issues
+
+If fonts don't load correctly in the local copy, this is often because:
+- The original site uses external font services (e.g., Google Fonts) that aren't downloaded
+- Font files may be corrupted or missing from the Wayback Machine archive
+- The scraper automatically removes corrupted font references from CSS
+
+For more details, see the [Font Loading Research Notes](docs/FONT_LOADING.md) document.
+
+## How Recursive Link Discovery Works
+
+The downloader uses an iterative crawling approach:
+
+1. **Initial Download**: Downloads the main page from the Wayback Machine
+2. **Link Extraction**: Parses HTML to find all links, images, CSS, and JavaScript
+3. **CSS Processing**: Extracts font URLs, background images, and `@import` statements from CSS files
+4. **JS Processing**: Extracts dynamically loaded resources from JavaScript files
+5. **Queue Management**: New links are added to a queue and processed until empty
+6. **Deduplication**: URLs are normalized (removes query strings, fragments) to prevent downloading the same file twice
+7. **Timeframe Fallback**: If a resource returns 404, searches nearby timestamps
+
+The process continues until all internal links are downloaded. External resources (like Google Fonts) are not downloaded by default.
+
 ## Development
 
 Run tests:
