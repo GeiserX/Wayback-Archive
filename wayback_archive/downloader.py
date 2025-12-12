@@ -256,10 +256,23 @@ class WaybackDownloader:
                 url = urljoin(base_url, url)
 
         # Handle protocol-relative URLs
+        # Use the scheme from base_url to preserve http/https consistency
         if url.startswith("//"):
-            url = "https:" + url
+            parsed_base = urlparse(base_url)
+            scheme = parsed_base.scheme if parsed_base.scheme else "http"
+            url = f"{scheme}:{url}"
 
         parsed = urlparse(url)
+        parsed_base = urlparse(base_url)
+        
+        # For internal URLs, preserve the scheme from base_url to ensure consistency
+        # This prevents http:// URLs from being converted to https://
+        url_domain = parsed.netloc.lower().lstrip("www.")
+        base_domain = parsed_base.netloc.lower().lstrip("www.")
+        if url_domain == base_domain or url_domain == "":
+            # Internal URL - use base_url scheme
+            if parsed_base.scheme and parsed.scheme != parsed_base.scheme:
+                parsed = parsed._replace(scheme=parsed_base.scheme)
 
         # Handle www/non-www conversion
         if self.config.make_non_www and parsed.netloc.startswith("www."):
