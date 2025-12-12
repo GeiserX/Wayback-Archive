@@ -172,6 +172,9 @@ class WaybackDownloader:
         asset_prefix = ""
         if any(ext in path for ext in [".jpg", ".jpeg", ".png", ".gif", ".svg", ".webp", ".ico", ".bmp"]):
             asset_prefix = "im_"
+        elif any(ext in path for ext in [".woff", ".woff2", ".ttf", ".eot", ".otf"]):
+            # Font files also use im_ prefix in Wayback Machine
+            asset_prefix = "im_"
         elif any(ext in path for ext in [".css"]):
             asset_prefix = "cs_"
         elif any(ext in path for ext in [".js"]):
