@@ -1098,8 +1098,23 @@ class WaybackDownloader:
             # Check if internal using normalized version
             is_internal = self._is_internal_url(normalized_for_check)
 
-            # Handle contact links (but preserve floating buttons - already handled above)
-            if self.config.remove_clickable_contacts and self._is_contact_link(original_url) and not is_floating_button:
+            # Handle contact links (but preserve floating buttons and icon groups - already handled above)
+            # Check if link is in an icon group before removing contact links
+            parent = link.parent
+            is_in_icon_group = False
+            while parent is not None:
+                parent_classes = parent.get("class", [])
+                if parent_classes:
+                    if isinstance(parent_classes, list):
+                        parent_classes_str = " ".join(parent_classes)
+                    else:
+                        parent_classes_str = str(parent_classes)
+                    if "sppb-icons-group-list" in parent_classes_str or "icons-group" in parent_classes_str.lower():
+                        is_in_icon_group = True
+                        break
+                parent = parent.parent if hasattr(parent, 'parent') else None
+            
+            if self.config.remove_clickable_contacts and self._is_contact_link(original_url) and not is_floating_button and not is_in_icon_group:
                 if self.config.remove_external_links_remove_anchors:
                     link.decompose()
                 else:
@@ -1131,6 +1146,27 @@ class WaybackDownloader:
                 is_button_link = "sppb-btn" in link_classes_str or "btn" in link_classes_str
                 if is_button_link:
                     # Preserve button links - just clean up the href (remove wayback prefix)
+                    link["href"] = original_url
+                    continue
+                
+                # Preserve links in icon groups (sppb-icons-group-list) - these are social media icons
+                # Check if the link is inside an icon group list
+                parent = link.parent
+                is_in_icon_group = False
+                while parent is not None:
+                    parent_classes = parent.get("class", [])
+                    if parent_classes:
+                        if isinstance(parent_classes, list):
+                            parent_classes_str = " ".join(parent_classes)
+                        else:
+                            parent_classes_str = str(parent_classes)
+                        if "sppb-icons-group-list" in parent_classes_str or "icons-group" in parent_classes_str.lower():
+                            is_in_icon_group = True
+                            break
+                    parent = parent.parent if hasattr(parent, 'parent') else None
+                
+                if is_in_icon_group:
+                    # Preserve icon group links - just clean up the href (remove wayback prefix)
                     link["href"] = original_url
                     continue
                 
