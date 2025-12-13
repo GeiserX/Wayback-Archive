@@ -1107,6 +1107,21 @@ class WaybackDownloader:
                     # Keep the original href for floating button contact links
                     continue
                 
+                # Preserve button links (sppb-btn classes) - these are styled buttons that should remain functional
+                link_classes = link.get("class", [])
+                if link_classes and isinstance(link_classes, list):
+                    link_classes_str = " ".join(link_classes)
+                elif link_classes:
+                    link_classes_str = str(link_classes)
+                else:
+                    link_classes_str = ""
+                
+                is_button_link = "sppb-btn" in link_classes_str or "btn" in link_classes_str
+                if is_button_link:
+                    # Preserve button links - just clean up the href (remove wayback prefix)
+                    link["href"] = original_url
+                    continue
+                
                 if self.config.remove_external_links_remove_anchors:
                     link.decompose()
                 elif self.config.remove_external_links_keep_anchors:
