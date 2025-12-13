@@ -22,12 +22,11 @@ jobs:
         pip install build twine
 
     - name: Build package
-      run: |
-        cd config
-        python setup.py sdist bdist_wheel
-        mv dist ../
+      working-directory: config
+      run: python setup.py sdist bdist_wheel
 
     - name: Publish to PyPI
+      working-directory: config
       env:
         TWINE_USERNAME: __token__
         TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
