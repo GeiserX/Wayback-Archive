@@ -22,7 +22,10 @@ jobs:
         pip install build twine
 
     - name: Build package
-      run: python -m build
+      run: |
+        cd config
+        python setup.py sdist bdist_wheel
+        mv dist ../
 
     - name: Publish to PyPI
       env:
