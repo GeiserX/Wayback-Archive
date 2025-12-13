@@ -355,6 +355,18 @@ class WaybackDownloader:
                      If False, preserves the original extension (for assets).
         """
         parsed = urlparse(url)
+        
+        # Special handling for Google Fonts URLs - preserve domain structure
+        if "fonts.googleapis.com" in parsed.netloc or "fonts.gstatic.com" in parsed.netloc:
+            # For Google Fonts, the file is saved with domain structure
+            # e.g., fonts.googleapis.com/css-abc123.css
+            domain_path = f"{parsed.netloc}{parsed.path}"
+            # Remove leading slashes
+            while domain_path.startswith("/"):
+                domain_path = domain_path[1:]
+            # Return with leading slash
+            return f"/{domain_path}"
+        
         path = unquote(parsed.path)
         
         # Keep leading slash for absolute paths from root
