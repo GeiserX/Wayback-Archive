@@ -293,6 +293,17 @@ class WaybackDownloader:
         Files are saved without query strings or fragments for clean URLs.
         """
         parsed = urlparse(url)
+        
+        # Special handling for Google Fonts - preserve domain structure
+        if "fonts.googleapis.com" in parsed.netloc or "fonts.gstatic.com" in parsed.netloc:
+            # For Google Fonts, preserve the full domain and path structure
+            # e.g., fonts.googleapis.com/css-abc123.css or fonts.gstatic.com/s/montserrat/v29/file.woff2
+            domain_path = f"{parsed.netloc}{parsed.path}"
+            # Remove leading slashes
+            while domain_path.startswith("/"):
+                domain_path = domain_path[1:]
+            return Path(self.config.output_dir) / domain_path
+        
         path = unquote(parsed.path)
         
         # Remove leading slashes (handle both single and double slashes)
@@ -432,7 +443,8 @@ class WaybackDownloader:
         parsed = urlparse(url)
         path = parsed.path.lower()
         asset_prefix = ""
-        if any(ext in path for ext in [".jpg", ".jpeg", ".png", ".gif", ".svg", ".webp", ".ico", ".bmp"]):
+        # Font files should use im_ prefix (images/assets)
+        if any(ext in path for ext in [".jpg", ".jpeg", ".png", ".gif", ".svg", ".webp", ".ico", ".bmp", ".woff", ".woff2", ".ttf", ".eot", ".otf"]):
             asset_prefix = "im_"
         elif any(ext in path for ext in [".css"]):
             asset_prefix = "cs_"
@@ -524,6 +536,10 @@ class WaybackDownloader:
         """Get a human-readable file type from URL."""
         parsed = urlparse(url)
         path = parsed.path.lower()
+        
+        # Check for Google Fonts CSS files (they don't have .css extension)
+        if "fonts.googleapis.com" in url and "/css" in url:
+            return "CSS"
         
         if path.endswith('.html') or path.endswith('.htm') or not os.path.splitext(path)[1]:
             return "HTML"
@@ -760,21 +776,59 @@ class WaybackDownloader:
             if original:
                 url_part = original
             
+            # Handle absolute paths starting with / in Google Fonts CSS files
+            # These are relative to fonts.gstatic.com, not the site's domain
+            if url_part.startswith("/") and not url_part.startswith("//"):
+                # Check if this is a Google Fonts CSS file (base_url contains fonts.googleapis.com)
+                if "fonts.googleapis.com" in base_url:
+                    # Convert to full Google Fonts URL
+                    url_part = f"https://fonts.gstatic.com{url_part}"
+                else:
+                    # Regular absolute path - convert using base_url
+                    parsed_base = urlparse(base_url)
+                    url_part = f"{parsed_base.scheme}://{parsed_base.netloc}{url_part}"
+            
             normalized = self._normalize_url(url_part, base_url)
             
-            if self._is_internal_url(normalized):
+            # Handle fonts.gstatic.com URLs - these need to be converted to local paths
+            # to avoid CORS issues when loading from localhost
+            is_google_font = "fonts.gstatic.com" in normalized or "fonts.googleapis.com" in normalized
+            if self._is_internal_url(normalized) or is_google_font:
                 if self.config.make_internal_links_relative:
-                    new_path = self._make_relative_path(normalized)
+                    # For Google Fonts, construct relative path from the normalized URL
+                    if is_google_font:
+                        # Construct path directly from URL to avoid path duplication
+                        parsed_font = urlparse(normalized)
+                        if "fonts.gstatic.com" in parsed_font.netloc:
+                            # Path will be like fonts.gstatic.com/s/montserrat/v29/...
+                            # Check if path already contains the domain (avoid duplication)
+                            font_path = parsed_font.path.lstrip("/")
+                            if font_path.startswith("fonts.gstatic.com"):
+                                relative_path = font_path
+                            else:
+                                relative_path = f"{parsed_font.netloc}/{font_path}"
+                        elif "fonts.googleapis.com" in parsed_font.netloc:
+                            # For Google Fonts CSS files
+                            relative_path = parsed_font.path.lstrip("/")
+                        else:
+                            relative_path = parsed_font.path.lstrip("/")
+                        # Ensure it starts with / for absolute paths
+                        if not relative_path.startswith("/"):
+                            relative_path = "/" + relative_path
+                        new_path = relative_path
+                    else:
+                        new_path = self._make_relative_path(normalized)
                     return f"url({new_path})"
                 return f"url({normalized})"
             
             return full_match
         
-        # Pattern to match url() with wayback URLs
+        # Pattern to match url() with wayback URLs and absolute paths
         url_patterns = [
             r'url\s*\(\s*["\']?(/web/\d+[a-z]*(?:im_|cs_|js_|jm_)/https?://[^"\'()]+)["\']?\s*\)',  # Relative wayback
             r'url\s*\(\s*["\']?(https?://web\.archive\.org/web/\d+[a-z]*(?:im_|cs_|js_|jm_)/https?://[^"\'()]+)["\']?\s*\)',  # Absolute wayback
             r'url\s*\(\s*["\']?(https?://[^"\'()]+)["\']?\s*\)',  # Regular URLs
+            r'url\s*\(\s*["\']?(/[^"\'()]+)["\']?\s*\)',  # Absolute paths (for Google Fonts CSS)
         ]
         
         for pattern in url_patterns:
@@ -861,8 +915,12 @@ class WaybackDownloader:
             element.decompose()
         
         # Remove wayback machine script tags by src
+        # But preserve cookie consent scripts (cookieyes, etc.) even if they come from external CDNs
         for script in soup.find_all("script", src=True):
             src = script.get("src", "")
+            # Preserve cookie consent scripts
+            if "cookieyes" in src.lower() or "cookie-consent" in src.lower():
+                continue
             if "web.archive.org" in src or "web-static.archive.org" in src or "bundle-playback.js" in src or "wombat.js" in src or "ruffle.js" in src:
                 script.decompose()
         
@@ -907,31 +965,20 @@ class WaybackDownloader:
                 if script_src and self._is_tracker(script_src):
                     script.decompose()
 
-            # Remove inline tracking scripts (Google Analytics, gtag, dataLayer, cookie consent)
+            # Remove inline tracking scripts (Google Analytics, gtag, dataLayer)
+            # Note: Cookie consent scripts (like cookieyes) are preserved as they're part of site functionality
             for script in soup.find_all("script"):
                 if script.string:
                     script_text = script.string.lower()
+                    # Only remove tracking scripts, not cookie consent functionality
                     if any(pattern in script_text for pattern in self.TRACKER_PATTERNS + [
-                        "gtag", "datalayer", "google-analytics", "cookieyes", "cookie consent",
-                        "cookie banner", "cookiebar"
+                        "gtag", "datalayer", "google-analytics"
                     ]):
-                        script.decompose()
+                        # Skip cookieyes and cookie consent scripts - preserve them
+                        if "cookieyes" not in script_text and "cookie consent" not in script_text:
+                            script.decompose()
             
-            # Remove cookie consent divs/banners
-            for element in soup.find_all(["div", "section"], class_=True):
-                element_classes = element.get("class")
-                if element_classes:
-                    classes = " ".join(element_classes if isinstance(element_classes, list) else [element_classes]).lower()
-                    if any(banner in classes for banner in ["cookie", "consent", "cookiebar", "cookie-banner", "cookieyes"]):
-                        element.decompose()
-            
-            # Remove cookie consent buttons/links
-            for element in soup.find_all(["button", "a"], class_=True):
-                element_classes = element.get("class")
-                if element_classes:
-                    classes = " ".join(element_classes if isinstance(element_classes, list) else [element_classes]).lower()
-                    if any(btn in classes for btn in ["cookie", "consent", "accept", "reject"]):
-                        element.decompose()
+            # Note: Cookie popups and consent UI are preserved - they're part of site functionality
 
         # Remove ads
         if self.config.remove_ads:
@@ -1111,6 +1158,8 @@ class WaybackDownloader:
             href = link.get("href", "")
             if not href:
                 continue
+            # Keep original href before processing (for Google Fonts detection)
+            original_href = href
             # Extract wayback URL first
             original = self._extract_original_url_from_path(href)
             if original:
@@ -1121,7 +1170,41 @@ class WaybackDownloader:
             normalized_url = self._normalize_url(href, base_url)
 
             # Handle external links (e.g., Google Fonts)
+            # For Google Fonts CSS files available on Wayback Machine, download them
+            # to ensure fonts load correctly locally
             if not self._is_internal_url(normalized_url):
+                # Check if this is a Google Fonts CSS file available on Wayback Machine
+                # The original_href might be a wayback path like //web.archive.org/web/...cs_/http://fonts.googleapis.com/...
+                if "fonts.googleapis.com" in normalized_url or "fonts.googleapis.com" in original_href:
+                    # Extract original URL from wayback path if present (use original_href which has the wayback path)
+                    original_font_url = self._extract_original_url_from_path(original_href)
+                    if not original_font_url:
+                        # If extraction failed, try using the already-extracted href
+                        original_font_url = href if "fonts.googleapis.com" in href else None
+                    if original_font_url:
+                        # Normalize for tracking (remove query strings for visited check)
+                        parsed_font = urlparse(original_font_url)
+                        normalized_font = parsed_font._replace(fragment="", query="").geturl()
+                        # Add to queue to download from Wayback Machine
+                        if normalized_font not in self.config.visited_urls:
+                            links_to_follow.append(original_font_url)
+                            print(f"         📥 Queued Google Fonts CSS for download: {original_font_url[:80]}...", flush=True)
+                        # Convert to local path immediately so HTML references local file
+                        # Use _get_local_path to determine where the file will be saved
+                        # For Google Fonts, create a path like /fonts.googleapis.com/css.css
+                        # But we need to handle the query string - use a hash or sanitized version
+                        import hashlib
+                        query_hash = hashlib.md5(parsed_font.query.encode()).hexdigest()[:8]
+                        font_path = f"fonts.googleapis.com/css-{query_hash}.css"
+                        local_font_path = self._get_local_path(f"http://{font_path}")
+                        # Get relative path for HTML
+                        if self.config.make_internal_links_relative:
+                            relative_path = self._get_relative_link_path(f"http://{font_path}", is_page=False)
+                            link["href"] = relative_path
+                        else:
+                            link["href"] = f"/{font_path}"
+                        continue
+                
                 # Remove external links if configured
                 if self.config.remove_external_links_remove_anchors:
                     link.decompose()
@@ -1255,6 +1338,53 @@ class WaybackDownloader:
                 css_content = self._remove_corrupted_fonts_from_css(css_content)
                 style_tag.string = css_content
 
+        # Process data-* attributes that contain URLs (e.g., data-video_src, data-src, data-href, etc.)
+        # Convert domain URLs to relative paths to match Wayback Machine behavior
+        for element in soup.find_all(True):  # All elements
+            if not hasattr(element, 'attrs') or not element.attrs:
+                continue
+            for attr_name, attr_value in element.attrs.items():
+                if attr_name.startswith('data-') and isinstance(attr_value, str):
+                    # Check if attribute contains a domain URL
+                    if self.config.domain and self.config.domain in attr_value:
+                        # Extract original URL if it's a wayback path
+                        original = self._extract_original_url_from_path(attr_value)
+                        if original:
+                            attr_value = original
+                        
+                        # Normalize and convert to relative path if internal
+                        normalized = self._normalize_url(attr_value, base_url)
+                        if self._is_internal_url(normalized) and self.config.make_internal_links_relative:
+                            # Convert to relative path
+                            relative_path = self._get_relative_link_path(normalized, is_page=False)
+                            element[attr_name] = relative_path
+                        elif self._is_internal_url(normalized):
+                            # Keep normalized URL but ensure it uses the correct scheme
+                            element[attr_name] = normalized
+
+        # Convert any remaining domain references in text content and attributes to relative paths
+        # This handles cases where domain URLs appear in href, src, or other attributes
+        parsed_base = urlparse(base_url)
+        base_domain = parsed_base.netloc.lower().lstrip("www.")
+        
+        for element in soup.find_all(True):  # All elements
+            for attr_name, attr_value in list(element.attrs.items()):
+                if isinstance(attr_value, str) and base_domain in attr_value.lower():
+                    # Check if it's a full URL with the domain
+                    if attr_value.startswith(("http://", "https://")):
+                        # Extract original URL if it's a wayback path
+                        original = self._extract_original_url_from_path(attr_value)
+                        if original:
+                            attr_value = original
+                        
+                        # Normalize and convert to relative path if internal
+                        normalized = self._normalize_url(attr_value, base_url)
+                        if self._is_internal_url(normalized) and self.config.make_internal_links_relative:
+                            relative_path = self._get_relative_link_path(normalized, is_page=False)
+                            element[attr_name] = relative_path
+                        elif self._is_internal_url(normalized):
+                            element[attr_name] = normalized
+
         # Get processed HTML
         processed_html = str(soup)
         processed_html = self._optimize_html(processed_html)
@@ -1312,9 +1442,27 @@ class WaybackDownloader:
 
             content = self.download_file(url)
             if not content:
-                files_failed += 1
-                print(f"         ⚠️  Failed to download", flush=True)
-                continue
+                # Try CDN fallback for critical jQuery files if Wayback fails
+                if "jquery.min.js" in url.lower() and "cdn" not in url.lower():
+                    cdn_urls = [
+                        "https://code.jquery.com/jquery-3.7.1.min.js",
+                        "https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js",
+                    ]
+                    for cdn_url in cdn_urls:
+                        try:
+                            print(f"         🔄 Trying CDN fallback: {cdn_url}", flush=True)
+                            cdn_response = self.session.get(cdn_url, timeout=10, allow_redirects=True)
+                            cdn_response.raise_for_status()
+                            content = cdn_response.content
+                            print(f"         ✓ Downloaded from CDN fallback", flush=True)
+                            break
+                        except:
+                            continue
+                
+                if not content:
+                    files_failed += 1
+                    print(f"         ⚠️  Failed to download", flush=True)
+                    continue
             
             # Show file size
             size_kb = len(content) / 1024
@@ -1331,7 +1479,10 @@ class WaybackDownloader:
                 content_type, _ = mimetypes.guess_type(parsed.path)
                 
                 # Better content type detection from URL path
-                if not content_type:
+                # Check for Google Fonts CSS files first (they don't have .css extension)
+                if "fonts.googleapis.com" in url and "/css" in url:
+                    content_type = "text/css"
+                elif not content_type:
                     path_lower = parsed.path.lower()
                     # Check for specific extensions
                     if path_lower.endswith(".css") or "/.css" in path_lower:
@@ -1375,18 +1526,32 @@ class WaybackDownloader:
                 content_type = None
             
             # Use normalized URL (without query strings) for file paths
-            local_path = self._get_local_path(normalized_for_tracking)
+            # Exception: For Google Fonts CSS files, preserve query string in path for uniqueness
+            if "fonts.googleapis.com" in url and "/css" in url:
+                # For Google Fonts CSS, use query string hash to create unique filename
+                import hashlib
+                parsed_original = urlparse(url)
+                query_hash = hashlib.md5(parsed_original.query.encode()).hexdigest()[:8]
+                font_path = f"fonts.googleapis.com/css-{query_hash}.css"
+                local_path = self._get_local_path(f"http://{font_path}")
+            else:
+                local_path = self._get_local_path(normalized_for_tracking)
             local_path.parent.mkdir(parents=True, exist_ok=True)
             
             try:
+                # Check for Google Fonts CSS files first (they don't have .css extension)
+                is_google_fonts_css = "fonts.googleapis.com" in url and "/css" in url
+                
                 # Process based on content type - be more conservative about what we treat as HTML
                 is_html = (
-                    content_type == "text/html" or 
-                    (not content_type and (
-                        url.endswith(".html") or 
-                        url.endswith(".htm") or
-                        (parsed.path and not os.path.splitext(parsed.path)[1] and "?" not in url and not any(parsed.path.lower().endswith(ext) for ext in [".css", ".js", ".json", ".xml", ".txt"]))
-                    ))
+                    not is_google_fonts_css and (
+                        content_type == "text/html" or 
+                        (not content_type and (
+                            url.endswith(".html") or 
+                            url.endswith(".htm") or
+                            (parsed.path and not os.path.splitext(parsed.path)[1] and "?" not in url and not any(parsed.path.lower().endswith(ext) for ext in [".css", ".js", ".json", ".xml", ".txt"]))
+                        ))
+                    )
                 )
                 
                 if is_html:
@@ -1462,7 +1627,10 @@ class WaybackDownloader:
                             # Normalize for tracking
                             parsed_css = urlparse(css_url)
                             normalized_css = parsed_css._replace(fragment="", query="").geturl()
-                            if normalized_css not in self.config.visited_urls and self._is_internal_url(css_url):
+                            # Handle fonts.gstatic.com URLs - these are external but available on Wayback Machine
+                            # They need to be downloaded to avoid CORS issues
+                            is_google_font = "fonts.gstatic.com" in css_url or "fonts.googleapis.com" in css_url
+                            if normalized_css not in self.config.visited_urls and (self._is_internal_url(css_url) or is_google_font):
                                 # Check if already in queue
                                 in_queue = False
                                 for q_url in queue:
@@ -1473,6 +1641,8 @@ class WaybackDownloader:
                                         break
                                 if not in_queue:
                                     queue.append(css_url)
+                                    if is_google_font:
+                                        print(f"         📥 Queued Google Font file for download: {css_url[:80]}...", flush=True)
                         
                         # Rewrite URLs in CSS to relative paths
                         css = self._rewrite_css_urls(css, url)
