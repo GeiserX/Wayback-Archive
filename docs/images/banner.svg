@@ -33,28 +33,41 @@
     <line x1="750" y1="0" x2="750" y2="200"/>
   </g>
 
-  <!-- Icon: Browser window with rewind arrow -->
-  <g transform="translate(120, 100)" filter="url(#glow)">
-    <!-- Stacked page behind (time layers) -->
-    <rect x="-28" y="-38" width="52" height="64" rx="4" fill="none" stroke="url(#iconGrad)" stroke-width="1.5" opacity="0.3"/>
+  <!-- Icon: 3 stacked browser windows, cascading bottom-right -->
+  <g transform="translate(115, 95)" filter="url(#glow)">
+    <!-- Window 3 (back, bottom-right, most faded) -->
+    <g opacity="0.2">
+      <rect x="-14" y="-22" width="52" height="64" rx="4" fill="none" stroke="url(#iconGrad)" stroke-width="1.5"/>
+      <line x1="-14" y1="-10" x2="38" y2="-10" stroke="url(#iconGrad)" stroke-width="1" opacity="0.5"/>
+      <circle cx="-6" cy="-16" r="1.5" fill="url(#iconGrad)"/>
+      <circle cx="1" cy="-16" r="1.5" fill="url(#iconGrad)"/>
+      <circle cx="8" cy="-16" r="1.5" fill="url(#iconGrad)"/>
+    </g>
 
-    <!-- Main browser window -->
-    <rect x="-34" y="-42" width="52" height="64" rx="4" fill="none" stroke="url(#iconGrad)" stroke-width="2.2"/>
-    <!-- Title bar line -->
-    <line x1="-34" y1="-30" x2="18" y2="-30" stroke="url(#iconGrad)" stroke-width="1.5" opacity="0.5"/>
-    <!-- Three dots (window controls) -->
-    <circle cx="-26" cy="-36" r="2" fill="url(#iconGrad)" opacity="0.7"/>
-    <circle cx="-18" cy="-36" r="2" fill="url(#iconGrad)" opacity="0.7"/>
-    <circle cx="-10" cy="-36" r="2" fill="url(#iconGrad)" opacity="0.7"/>
-    <!-- Content lines -->
-    <line x1="-26" y1="-20" x2="10" y2="-20" stroke="url(#iconGrad)" stroke-width="1.8" stroke-linecap="round" opacity="0.5"/>
-    <line x1="-26" y1="-10" x2="2" y2="-10" stroke="url(#iconGrad)" stroke-width="1.8" stroke-linecap="round" opacity="0.35"/>
-    <line x1="-26" y1="0" x2="8" y2="0" stroke="url(#iconGrad)" stroke-width="1.8" stroke-linecap="round" opacity="0.25"/>
+    <!-- Window 2 (middle) -->
+    <g opacity="0.45">
+      <rect x="-24" y="-32" width="52" height="64" rx="4" fill="none" stroke="url(#iconGrad)" stroke-width="1.8"/>
+      <line x1="-24" y1="-20" x2="28" y2="-20" stroke="url(#iconGrad)" stroke-width="1.2" opacity="0.5"/>
+      <circle cx="-16" cy="-26" r="1.5" fill="url(#iconGrad)"/>
+      <circle cx="-9" cy="-26" r="1.5" fill="url(#iconGrad)"/>
+      <circle cx="-2" cy="-26" r="1.5" fill="url(#iconGrad)"/>
+      <!-- Content lines -->
+      <line x1="-16" y1="-10" x2="16" y2="-10" stroke="url(#iconGrad)" stroke-width="1.5" stroke-linecap="round" opacity="0.3"/>
+      <line x1="-16" y1="-1" x2="8" y2="-1" stroke="url(#iconGrad)" stroke-width="1.5" stroke-linecap="round" opacity="0.2"/>
+    </g>
 
-    <!-- Counterclockwise rewind arrow wrapping the page -->
-    <path d="M 28,10 A 38,38 0 1,0 -8,-48" fill="none" stroke="#42A5F5" stroke-width="2.8" stroke-linecap="round"/>
-    <!-- Arrow tip -->
-    <polygon points="-14,-44 -6,-52 -2,-42" fill="#42A5F5"/>
+    <!-- Window 1 (front, top-left, fully visible) -->
+    <g opacity="1">
+      <rect x="-34" y="-42" width="52" height="64" rx="4" fill="none" stroke="url(#iconGrad)" stroke-width="2.2"/>
+      <line x1="-34" y1="-30" x2="18" y2="-30" stroke="url(#iconGrad)" stroke-width="1.5" opacity="0.5"/>
+      <circle cx="-26" cy="-36" r="2" fill="url(#iconGrad)" opacity="0.7"/>
+      <circle cx="-18" cy="-36" r="2" fill="url(#iconGrad)" opacity="0.7"/>
+      <circle cx="-10" cy="-36" r="2" fill="url(#iconGrad)" opacity="0.7"/>
+      <!-- Content lines -->
+      <line x1="-26" y1="-20" x2="10" y2="-20" stroke="url(#iconGrad)" stroke-width="1.8" stroke-linecap="round" opacity="0.5"/>
+      <line x1="-26" y1="-10" x2="2" y2="-10" stroke="url(#iconGrad)" stroke-width="1.8" stroke-linecap="round" opacity="0.35"/>
+      <line x1="-26" y1="0" x2="8" y2="0" stroke="url(#iconGrad)" stroke-width="1.8" stroke-linecap="round" opacity="0.25"/>
+    </g>
   </g>
 
   <!-- Title -->
