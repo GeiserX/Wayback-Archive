@@ -33,22 +33,28 @@
     <line x1="750" y1="0" x2="750" y2="200"/>
   </g>
 
-  <!-- Icon: Archive building with rewind clock -->
+  <!-- Icon: Browser window with rewind arrow -->
   <g transform="translate(120, 100)" filter="url(#glow)">
-    <!-- Pediment (triangle roof) -->
-    <polygon points="0,-52 -44,-22 44,-22" fill="none" stroke="url(#iconGrad)" stroke-width="2.5" stroke-linejoin="round"/>
-    <!-- 4 evenly spaced columns, centered -->
-    <rect x="-33" y="-20" width="6" height="50" rx="1" fill="url(#iconGrad)" opacity="0.9"/>
-    <rect x="-15" y="-20" width="6" height="50" rx="1" fill="url(#iconGrad)" opacity="0.9"/>
-    <rect x="9" y="-20" width="6" height="50" rx="1" fill="url(#iconGrad)" opacity="0.9"/>
-    <rect x="27" y="-20" width="6" height="50" rx="1" fill="url(#iconGrad)" opacity="0.9"/>
-    <!-- Base -->
-    <rect x="-40" y="30" width="80" height="6" rx="1" fill="url(#iconGrad)" opacity="0.8"/>
-    <!-- Counterclockwise time arrow (bottom-right of building) -->
-    <g transform="translate(32, -38)">
-      <path d="M 12,0 A 12,12 0 1,0 0,-12" fill="none" stroke="#42A5F5" stroke-width="2.2" stroke-linecap="round"/>
-      <polyline points="-4,-14.5 0,-12 -4.5,-9" fill="none" stroke="#42A5F5" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
-    </g>
+    <!-- Stacked page behind (time layers) -->
+    <rect x="-28" y="-38" width="52" height="64" rx="4" fill="none" stroke="url(#iconGrad)" stroke-width="1.5" opacity="0.3"/>
+
+    <!-- Main browser window -->
+    <rect x="-34" y="-42" width="52" height="64" rx="4" fill="none" stroke="url(#iconGrad)" stroke-width="2.2"/>
+    <!-- Title bar line -->
+    <line x1="-34" y1="-30" x2="18" y2="-30" stroke="url(#iconGrad)" stroke-width="1.5" opacity="0.5"/>
+    <!-- Three dots (window controls) -->
+    <circle cx="-26" cy="-36" r="2" fill="url(#iconGrad)" opacity="0.7"/>
+    <circle cx="-18" cy="-36" r="2" fill="url(#iconGrad)" opacity="0.7"/>
+    <circle cx="-10" cy="-36" r="2" fill="url(#iconGrad)" opacity="0.7"/>
+    <!-- Content lines -->
+    <line x1="-26" y1="-20" x2="10" y2="-20" stroke="url(#iconGrad)" stroke-width="1.8" stroke-linecap="round" opacity="0.5"/>
+    <line x1="-26" y1="-10" x2="2" y2="-10" stroke="url(#iconGrad)" stroke-width="1.8" stroke-linecap="round" opacity="0.35"/>
+    <line x1="-26" y1="0" x2="8" y2="0" stroke="url(#iconGrad)" stroke-width="1.8" stroke-linecap="round" opacity="0.25"/>
+
+    <!-- Counterclockwise rewind arrow wrapping the page -->
+    <path d="M 28,10 A 38,38 0 1,0 -8,-48" fill="none" stroke="#42A5F5" stroke-width="2.8" stroke-linecap="round"/>
+    <!-- Arrow tip -->
+    <polygon points="-14,-44 -6,-52 -2,-42" fill="#42A5F5"/>
   </g>
 
   <!-- Title -->
