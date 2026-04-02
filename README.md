@@ -298,6 +298,13 @@ The tool includes automatic CDN fallback for critical libraries. If a file fails
 
 Contributions are welcome. Please feel free to submit a Pull Request.
 
+## Related Web Archiving Tools
+
+- [Way-CMS](https://github.com/GeiserX/Way-CMS) — Simple web CMS for editing archived HTML/CSS files
+- [Website-Diff](https://github.com/GeiserX/Website-Diff) — Web page comparison with Wayback Machine support
+- [web-mirror](https://github.com/GeiserX/web-mirror) — Mirror any webpage for offline access
+- [media-download](https://github.com/GeiserX/media-download) — Download all media files from any web page
+
 ## License
 
 This project is licensed under the [GNU General Public License v3.0](LICENSE) (GPL-3.0).
