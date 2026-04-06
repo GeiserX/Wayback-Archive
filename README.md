@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/images/banner.svg" alt="Wayback-Archive banner" width="900"/>
+  <img src="https://raw.githubusercontent.com/GeiserX/Wayback-Archive/main/docs/images/banner.svg" alt="Wayback-Archive banner" width="900"/>
 </p>
 
 <p align="center">
@@ -7,6 +7,7 @@
 </p>
 
 <p align="center">
+  <a href="https://pypi.org/project/wayback-archive/"><img src="https://img.shields.io/pypi/v/wayback-archive?style=flat-square" alt="PyPI"></a>
   <a href="https://github.com/GeiserX/Wayback-Archive/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/GeiserX/Wayback-Archive/ci.yml?style=flat-square&logo=github&label=build" alt="Build"></a>
   <a href="https://github.com/GeiserX/Wayback-Archive/releases"><img src="https://img.shields.io/github/v/release/GeiserX/Wayback-Archive?style=flat-square" alt="Release"></a>
   <a href="https://github.com/GeiserX/Wayback-Archive/blob/main/LICENSE"><img src="https://img.shields.io/github/license/GeiserX/Wayback-Archive?style=flat-square" alt="License"></a>
