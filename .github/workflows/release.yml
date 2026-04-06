@@ -25,12 +25,25 @@ jobs:
       working-directory: config
       run: python setup.py sdist bdist_wheel
 
+    - name: Upload built distributions
+      uses: actions/upload-artifact@v4
+      with:
+        name: wayback-archive-dist
+        path: config/dist/*
+        if-no-files-found: error
+
     - name: Publish to PyPI
+      if: ${{ secrets.PYPI_API_TOKEN != '' }}
       working-directory: config
       env:
         TWINE_USERNAME: __token__
         TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
       run: |
         twine upload dist/*
+
+    - name: Skip PyPI publish when secret is missing
+      if: ${{ secrets.PYPI_API_TOKEN == '' }}
+      run: |
+        echo "::warning::PYPI_API_TOKEN is not set, so this release was built but not published to PyPI."
 
 

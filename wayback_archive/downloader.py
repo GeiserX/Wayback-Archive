@@ -227,18 +227,10 @@ class WaybackDownloader:
             if path.startswith("//"):
                 path = "https:" + path
             
-            # Pattern: /web/TIMESTAMPim_/https://original.com/path or /web/TIMESTAMPcs_/ or /web/TIMESTAMPjs_/ or /web/TIMESTAMPjm_/
-            wayback_asset_pattern = r"/web/\d+[a-z]*(?:im_|cs_|js_|jm_)/(https?://[^\"\s'<>\)]+)"
-            match = re.search(wayback_asset_pattern, path)
-            if match:
-                extracted = match.group(1)
-                # Clean up any trailing characters that might have been captured
-                extracted = extracted.rstrip('.,;:)\'"')
-                return extracted
-            
-            # Pattern: /web/TIMESTAMP/https://original.com/path (for pages)
-            wayback_page_pattern = r"/web/\d+[a-z]*/(https?://[^\"\s'<>\)]+)"
-            match = re.search(wayback_page_pattern, path)
+            # Pattern: /web/TIMESTAMP/https://original.com/path and replay variants
+            # such as im_, cs_, js_, jm_, if_, and fw_.
+            wayback_url_pattern = r"(?:https?://web\.archive\.org)?/web/\d+(?:[a-z]+_)?/(https?://[^\"\s'<>\)]+)"
+            match = re.search(wayback_url_pattern, path)
             if match:
                 extracted = match.group(1)
                 extracted = extracted.rstrip('.,;:)\'"')
@@ -1133,7 +1125,7 @@ class WaybackDownloader:
                     first_script.insert_before(static_script)
         
         # Remove comments
-        for comment in soup.findAll(string=lambda text: isinstance(text, Comment)):
+        for comment in soup.find_all(string=lambda text: isinstance(text, Comment)):
             comment.extract()
 
         # Remove trackers and analytics

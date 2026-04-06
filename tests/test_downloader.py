@@ -2,6 +2,7 @@
 
 import os
 import pytest
+from bs4 import BeautifulSoup
 from unittest.mock import Mock, patch, MagicMock
 from wayback_archive.config import Config
 from wayback_archive.downloader import WaybackDownloader
@@ -113,4 +114,36 @@ class TestWaybackDownloader:
         """
         minified = self.downloader._minify_css(css)
         assert len(minified) <= len(css)
+
+    def test_process_html_rewrites_and_queues_frames(self):
+        """Test that frame-based pages are rewritten and queued for download."""
+        self.config.remove_external_iframes = True
+
+        html = """
+        <html>
+            <frameset cols="25%,75%">
+                <frame src="/web/20010405003907fw_/http://example.com/left.html">
+                <frame src="content">
+                <iframe src="/web/20010405003907if_/http://example.com/embed"></iframe>
+                <iframe src="http://other.com/external.html"></iframe>
+            </frameset>
+        </html>
+        """
+
+        processed_html, links_to_follow = self.downloader._process_html(
+            html,
+            "http://example.com/index.html",
+        )
+
+        soup = BeautifulSoup(processed_html, "lxml")
+        sources = [tag.get("src") for tag in soup.find_all(["frame", "iframe"], src=True)]
+
+        assert "/left.html" in sources
+        assert "/content.html" in sources
+        assert "/embed.html" in sources
+        assert all("other.com" not in src for src in sources)
+
+        assert "http://example.com/left.html" in links_to_follow
+        assert "http://example.com/embed" in links_to_follow
+        assert any(link == "content" or link.endswith("/content") for link in links_to_follow)
 

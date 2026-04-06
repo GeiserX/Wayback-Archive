@@ -1,28 +1,42 @@
-from setuptools import setup, find_packages
-import os
+import re
+from pathlib import Path
 
-# Get the parent directory (repository root)
-repo_root = os.path.dirname(os.path.dirname(__file__))
+from setuptools import find_packages, setup
 
-# Read README from parent directory
-readme_path = os.path.join(repo_root, "README.md")
-with open(readme_path, "r", encoding="utf-8") as fh:
+
+CONFIG_DIR = Path(__file__).resolve().parent
+REPO_ROOT = CONFIG_DIR.parent
+
+
+def read_version() -> str:
+    """Read the package version from the source package."""
+    init_py = REPO_ROOT / "wayback_archive" / "__init__.py"
+    match = re.search(
+        r'^__version__ = ["\']([^"\']+)["\']',
+        init_py.read_text(encoding="utf-8"),
+        re.MULTILINE,
+    )
+    if not match:
+        raise RuntimeError("Unable to find package version in wayback_archive/__init__.py")
+    return match.group(1)
+
+
+with (REPO_ROOT / "README.md").open("r", encoding="utf-8") as fh:
     long_description = fh.read()
 
-# Read requirements from current directory (config/)
-with open("requirements.txt", "r", encoding="utf-8") as fh:
+with (CONFIG_DIR / "requirements.txt").open("r", encoding="utf-8") as fh:
     requirements = [line.strip() for line in fh if line.strip() and not line.startswith("#")]
 
 setup(
     name="wayback-archive",
-    version="1.3.0",
+    version=read_version(),
     author="GeiserX",
     description="A comprehensive tool for downloading and archiving websites from the Wayback Machine",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/GeiserX/Wayback-Archive",
-    packages=find_packages(where=repo_root, exclude=["tests", "tests.*"]),
-    package_dir={"": repo_root},
+    packages=find_packages(where=str(REPO_ROOT), exclude=["tests", "tests.*"]),
+    package_dir={"": str(REPO_ROOT)},
     classifiers=[
         "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",
