@@ -1415,6 +1415,24 @@ class WaybackDownloader:
                 if normalized_url not in self.config.visited_urls:
                     links_to_follow.append(original_url)
 
+        # Process HTML background attributes (legacy <body>, <table>, <td>, <tr>, <th>)
+        for elem in soup.find_all(["body", "table", "td", "tr", "th"], attrs={"background": True}):
+            bg = elem.get("background", "")
+            if not bg:
+                continue
+            original = self._extract_original_url_from_path(bg)
+            if original:
+                bg = original
+            original_url = bg
+            normalized_url = self._normalize_url(bg, base_url)
+            if self._is_internal_url(normalized_url):
+                if self.config.make_internal_links_relative:
+                    elem["background"] = self._get_relative_link_path(normalized_url, is_page=False)
+                else:
+                    elem["background"] = normalized_url
+                if normalized_url not in self.config.visited_urls:
+                    links_to_follow.append(original_url)
+
         # Process picture/source tags for responsive images
         for picture in soup.find_all("picture"):
             for source in picture.find_all("source", srcset=True):
@@ -1790,10 +1808,10 @@ class WaybackDownloader:
         
         for element in soup.find_all(True):  # All elements
             for attr_name, attr_value in list(element.attrs.items()):
-                if isinstance(attr_value, str) and (base_domain in attr_value.lower() or self._is_squarespace_cdn(attr_value) or "web.archive.org" in attr_value):
+                if isinstance(attr_value, str) and (base_domain in attr_value.lower() or self._is_squarespace_cdn(attr_value) or "web.archive.org" in attr_value or attr_value.startswith("/web/")):
                     # Check if it's a full URL with the domain or a Squarespace CDN URL
                     is_squarespace_cdn = self._is_squarespace_cdn(attr_value)
-                    if attr_value.startswith(("http://", "https://")) or is_squarespace_cdn or "web.archive.org" in attr_value:
+                    if attr_value.startswith(("http://", "https://", "/web/")) or is_squarespace_cdn or "web.archive.org" in attr_value:
                         # Extract original URL if it's a wayback path
                         original = self._extract_original_url_from_path(attr_value)
                         if original:
