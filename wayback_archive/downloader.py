@@ -1172,6 +1172,31 @@ class WaybackDownloader:
                 if not self._is_internal_url(iframe["src"]):
                     iframe.decompose()
 
+        # Process frames (<frame src="...">) and internal iframes
+        # Frame-based pages (using <frameset>/<frame>) won't render without their frame content
+        for frame in soup.find_all(["frame", "iframe"], src=True):
+            src = frame.get("src", "")
+            if not src:
+                continue
+            # Extract wayback URL first
+            original = self._extract_original_url_from_path(src)
+            if original:
+                src = original
+            # Keep original URL with query strings for downloading
+            original_url = src
+            # Normalize for checking and final output
+            normalized_url = self._normalize_url(src, base_url)
+
+            if self._is_internal_url(normalized_url):
+                if self.config.make_internal_links_relative:
+                    # Frame content is HTML pages
+                    frame["src"] = self._get_relative_link_path(normalized_url, is_page=True)
+                else:
+                    frame["src"] = normalized_url
+
+                if normalized_url not in self.config.visited_urls:
+                    links_to_follow.append(original_url)
+
         # Process links
         for link in soup.find_all("a", href=True):
             if link is None:
