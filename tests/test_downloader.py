@@ -138,9 +138,9 @@ class TestWaybackDownloader:
         soup = BeautifulSoup(processed_html, "lxml")
         sources = [tag.get("src") for tag in soup.find_all(["frame", "iframe"], src=True)]
 
-        assert "/left.html" in sources
-        assert "/content.html" in sources
-        assert "/embed.html" in sources
+        assert "left.html" in sources
+        assert "content.html" in sources
+        assert "embed.html" in sources
         assert all("other.com" not in src for src in sources)
 
         assert "http://example.com/left.html" in links_to_follow
@@ -177,10 +177,10 @@ class TestWaybackDownloader:
 
         # background= attributes must be rewritten to relative paths
         body = soup.find("body")
-        assert body["background"] == "/background.gif"
+        assert body["background"] == "background.gif"
 
         table = soup.find("table")
-        assert table["background"] == "/background.gif"
+        assert table["background"] == "background.gif"
 
         # The background image must be queued for download
         assert "http://example.com/background.gif" in links_to_follow

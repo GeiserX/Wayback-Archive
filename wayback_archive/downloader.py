@@ -1,6 +1,7 @@
 """Core downloader module for Wayback-Archive."""
 
 import os
+import posixpath
 import re
 import sys
 import mimetypes
@@ -210,12 +211,13 @@ class WaybackDownloader:
     def _make_relative_path(self, url: str) -> str:
         """Convert absolute URL to relative path."""
         parsed = urlparse(url)
-        path = parsed.path
+        path = parsed.path or "/"
+        suffix = ""
         if parsed.query:
-            path += "?" + parsed.query
+            suffix += "?" + parsed.query
         if parsed.fragment:
-            path += "#" + parsed.fragment
-        return path or "/"
+            suffix += "#" + parsed.fragment
+        return self._to_relative_path(path) + suffix
 
     def _extract_original_url_from_path(self, path: str) -> Optional[str]:
         """Extract original URL from Wayback Machine path in HTML."""
@@ -375,81 +377,92 @@ class WaybackDownloader:
     
     def _get_relative_link_path(self, url: str, is_page: bool = True) -> str:
         """
-        Get relative link path that matches where the file will be saved.
-        This ensures href/src attributes point to the correct file paths.
-        
+        Get truly relative link path that matches where the file will be saved.
+        Paths are relative to the current page so files work when opened
+        directly from the filesystem (no web server required).
+
         Args:
             url: The normalized URL to convert
             is_page: If True, adds .html extension to paths without extensions.
                      If False, preserves the original extension (for assets).
         """
         parsed = urlparse(url)
-        
+
         # Special handling for Google Fonts URLs - preserve domain structure
         if "fonts.googleapis.com" in parsed.netloc or "fonts.gstatic.com" in parsed.netloc:
-            # For Google Fonts, the file is saved with domain structure
-            # e.g., fonts.googleapis.com/css-abc123.css
             domain_path = f"{parsed.netloc}{parsed.path}"
-            # Remove leading slashes
             while domain_path.startswith("/"):
                 domain_path = domain_path[1:]
-            # Return with leading slash
-            return f"/{domain_path}"
-        
+            path = f"/{domain_path}"
+
         # Special handling for Squarespace CDN URLs - preserve domain structure
-        # This matches how _get_local_path saves these files
-        if self._is_squarespace_cdn(url):
+        elif self._is_squarespace_cdn(url):
             domain_path = f"{parsed.netloc}{parsed.path}"
-            # Remove leading slashes
             while domain_path.startswith("/"):
                 domain_path = domain_path[1:]
-            # Return with leading slash
-            return f"/{domain_path}"
-        
-        path = unquote(parsed.path)
-        
-        # Keep leading slash for absolute paths from root
-        # Python's http.server handles leading slashes correctly
-        
-        # Default to / for root
-        if not path or path.endswith("/"):
-            return "/"
-        
-        # Determine if this has an asset extension (for better detection)
-        known_asset_extensions = {
-            ".css", ".js", ".jpg", ".jpeg", ".png", ".gif", ".svg", ".webp", 
-            ".ico", ".woff", ".woff2", ".ttf", ".eot", ".otf", ".pdf", ".zip",
-            ".mp4", ".mp3", ".avi", ".mov", ".wmv", ".flv", ".pdf", ".doc", ".docx"
-        }
-        
-        has_extension = "." in os.path.basename(path)
-        is_asset = False
-        if has_extension:
-            ext = os.path.splitext(path)[1].lower()
-            is_asset = ext in known_asset_extensions
-        
-        # For pages without extensions, add .html to match saved file
-        # For assets, preserve original extension
-        # Only add .html if explicitly a page AND has no extension
-        if is_page and not has_extension and not is_asset:
-            # Add .html extension to match saved file
-            path = path + ".html"
-        elif not is_page and not has_extension:
-            # For assets without extension, preserve as-is (let server handle it)
-            pass
-        
-        # Ensure leading slash for absolute paths
-        if not path.startswith("/"):
-            path = "/" + path
-        
-        # Preserve query string and fragment if present
-        # These are preserved in links even though files are saved without them
+            path = f"/{domain_path}"
+
+        else:
+            path = unquote(parsed.path)
+
+            # Directory or root → index.html (matches _get_local_path behavior)
+            if not path or path.endswith("/"):
+                path = (path.rstrip("/") or "") + "/index.html"
+
+            # Determine if this has an asset extension
+            known_asset_extensions = {
+                ".css", ".js", ".jpg", ".jpeg", ".png", ".gif", ".svg", ".webp",
+                ".ico", ".woff", ".woff2", ".ttf", ".eot", ".otf", ".pdf", ".zip",
+                ".mp4", ".mp3", ".avi", ".mov", ".wmv", ".flv", ".pdf", ".doc", ".docx"
+            }
+
+            has_extension = "." in os.path.basename(path)
+            is_asset = False
+            if has_extension:
+                ext = os.path.splitext(path)[1].lower()
+                is_asset = ext in known_asset_extensions
+
+            if is_page and not has_extension and not is_asset:
+                path = path + ".html"
+
+            # Ensure leading slash for relpath computation
+            if not path.startswith("/"):
+                path = "/" + path
+
+        # Collect query/fragment suffix (not part of file path)
+        suffix = ""
         if parsed.query:
-            path += "?" + parsed.query
+            suffix += "?" + parsed.query
         if parsed.fragment:
-            path += "#" + parsed.fragment
-        
-        return path
+            suffix += "#" + parsed.fragment
+
+        # Compute truly relative path from the current page's directory
+        current_url = getattr(self, '_current_page_url', None)
+        if current_url:
+            from_parsed = urlparse(current_url)
+            from_path = unquote(from_parsed.path)
+            if not from_path or from_path.endswith("/"):
+                from_dir = from_path.rstrip("/") or "/"
+            else:
+                from_dir = posixpath.dirname(from_path)
+            if not from_dir:
+                from_dir = "/"
+            path = posixpath.relpath(path, from_dir)
+
+        return path + suffix
+
+    def _to_relative_path(self, abs_path: str) -> str:
+        """Convert a root-absolute path to one relative to the current page."""
+        current_url = getattr(self, '_current_page_url', None)
+        if not current_url or not abs_path.startswith("/"):
+            return abs_path
+        from_parsed = urlparse(current_url)
+        from_path = unquote(from_parsed.path)
+        if not from_path or from_path.endswith("/"):
+            from_dir = from_path.rstrip("/") or "/"
+        else:
+            from_dir = posixpath.dirname(from_path)
+        return posixpath.relpath(abs_path, from_dir or "/")
 
     def _generate_timestamp_variants(self, hours_range: int = 24, step_hours: int = 1) -> List[str]:
         """Generate timestamp variants for timeframe search.
@@ -1043,6 +1056,7 @@ class WaybackDownloader:
 
     def _process_html(self, html: str, base_url: str) -> tuple[str, List[str]]:
         """Process HTML content and extract links."""
+        self._current_page_url = base_url
         soup = BeautifulSoup(html, "lxml")
         links_to_follow: List[str] = []
 
@@ -1406,7 +1420,7 @@ class WaybackDownloader:
                         # Remove leading slashes
                         while img_path.startswith("/"):
                             img_path = img_path[1:]
-                        img["src"] = f"/{img_path}"
+                        img["src"] = self._to_relative_path(f"/{img_path}")
                     else:
                         img["src"] = self._get_relative_link_path(normalized_url, is_page=False)
                 else:
@@ -1486,7 +1500,7 @@ class WaybackDownloader:
                             while resource_path.startswith("/"):
                                 resource_path = resource_path[1:]
                             if self.config.make_internal_links_relative:
-                                srcset_parts.append(f"/{resource_path}{descriptor}")
+                                srcset_parts.append(f"{self._to_relative_path(f'/{resource_path}')}{descriptor}")
                             else:
                                 srcset_parts.append(f"{normalized_srcset}{descriptor}")
                         else:
@@ -1518,7 +1532,7 @@ class WaybackDownloader:
                             img_path = f"{parsed_img.netloc}{parsed_img.path}"
                             while img_path.startswith("/"):
                                 img_path = img_path[1:]
-                            img["src"] = f"/{img_path}"
+                            img["src"] = self._to_relative_path(f"/{img_path}")
                         else:
                             img["src"] = self._get_relative_link_path(normalized_url, is_page=False)
                     else:
@@ -1583,7 +1597,7 @@ class WaybackDownloader:
                             relative_path = self._get_relative_link_path(f"http://{resource_path}", is_page=False)
                             link["href"] = relative_path
                         else:
-                            link["href"] = f"/{resource_path}"
+                            link["href"] = self._to_relative_path(f"/{resource_path}")
                         continue
                 
                 # Remove external links if configured
@@ -1684,7 +1698,7 @@ class WaybackDownloader:
                             asset_path += "?" + parsed_asset.query
                         while asset_path.startswith("/"):
                             asset_path = asset_path[1:]
-                        link["href"] = f"/{asset_path}"
+                        link["href"] = self._to_relative_path(f"/{asset_path}")
                     else:
                         link["href"] = self._make_relative_path(normalized_url)
                 else:
@@ -1729,7 +1743,7 @@ class WaybackDownloader:
                                 resource_path = f"{parsed_resource.netloc}{parsed_resource.path}"
                                 while resource_path.startswith("/"):
                                     resource_path = resource_path[1:]
-                                new_path = f"/{resource_path}"
+                                new_path = self._to_relative_path(f"/{resource_path}")
                             else:
                                 new_path = self._make_relative_path(normalized)
                             return f"url({new_path})"
@@ -1793,7 +1807,7 @@ class WaybackDownloader:
                                     asset_path += "?" + parsed_asset.query
                                 while asset_path.startswith("/"):
                                     asset_path = asset_path[1:]
-                                element[attr_name] = f"/{asset_path}"
+                                element[attr_name] = self._to_relative_path(f"/{asset_path}")
                             else:
                                 relative_path = self._get_relative_link_path(normalized, is_page=False)
                                 element[attr_name] = relative_path
@@ -1828,7 +1842,7 @@ class WaybackDownloader:
                                     asset_path += "?" + parsed_asset.query
                                 while asset_path.startswith("/"):
                                     asset_path = asset_path[1:]
-                                element[attr_name] = f"/{asset_path}"
+                                element[attr_name] = self._to_relative_path(f"/{asset_path}")
                             else:
                                 relative_path = self._get_relative_link_path(normalized, is_page=False)
                                 element[attr_name] = relative_path
