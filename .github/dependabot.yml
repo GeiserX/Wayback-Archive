@@ -21,3 +21,29 @@ updates:
   - dependency-name: '*'
     update-types:
     - version-update:semver-major
+- package-ecosystem: pip
+  directory: /config
+  schedule:
+    interval: weekly
+    day: monday
+  open-pull-requests-limit: 10
+  commit-message:
+    prefix: deps
+  labels:
+  - dependencies
+  - automated
+  groups:
+    minor-and-patch:
+      patterns:
+      - '*'
+      update-types:
+      - minor
+      - patch
+    pip-security:
+      applies-to: security-updates
+      patterns:
+      - '*'
+  ignore:
+  - dependency-name: '*'
+    update-types:
+    - version-update:semver-major
