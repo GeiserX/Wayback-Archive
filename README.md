@@ -13,6 +13,7 @@
   <a href="https://github.com/GeiserX/Wayback-Archive/blob/main/LICENSE"><img src="https://img.shields.io/github/license/GeiserX/Wayback-Archive?style=flat-square" alt="License"></a>
   <img src="https://img.shields.io/badge/python-3.8%2B-blue?style=flat-square&logo=python&logoColor=white" alt="Python 3.8+">
   <a href="https://github.com/GeiserX/Wayback-Archive/stargazers"><img src="https://img.shields.io/github/stars/GeiserX/Wayback-Archive?style=flat-square" alt="GitHub Stars"></a>
+  <a href="https://codecov.io/gh/GeiserX/Wayback-Archive"><img src="https://codecov.io/gh/GeiserX/Wayback-Archive/graph/badge.svg" alt="codecov"></a>
 </p>
 
 ---
