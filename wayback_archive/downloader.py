@@ -2018,8 +2018,10 @@ class WaybackDownloader:
                     not is_google_fonts_css and (
                         content_type == "text/html" or 
                         (not content_type and (
-                            url.endswith(".html") or 
+                            url.endswith(".html") or
                             url.endswith(".htm") or
+                            # Bare-host or root URLs (empty path or "/") are HTML.
+                            (not parsed.path or parsed.path == "/") or
                             (parsed.path and not os.path.splitext(parsed.path)[1] and "?" not in url and not any(parsed.path.lower().endswith(ext) for ext in [".css", ".js", ".json", ".xml", ".txt"]))
                         ))
                     )
