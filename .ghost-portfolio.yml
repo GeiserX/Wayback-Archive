@@ -1,0 +1,7 @@
+description: "Download complete websites from the Wayback Machine with full asset preservation for offline viewing."
+personalNote: "When you need to preserve a website exactly as it was — images, CSS, JavaScript, everything — this tool downloads it all from the Wayback Machine and reconstructs it locally."
+keyFeatures:
+  - "Full website download from Wayback Machine"
+  - "Complete asset preservation (images, CSS, JS)"
+  - "Organized local file structure"
+techStack: "Python"
