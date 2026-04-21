@@ -7,7 +7,7 @@ on:
 
 jobs:
   publish:
-    runs-on: [self-hosted, Linux, X64, geiserback]
+    runs-on: [self-hosted, Linux, X64]
     env:
       PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
 
