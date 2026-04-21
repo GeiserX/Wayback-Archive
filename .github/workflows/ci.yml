@@ -9,7 +9,7 @@ on:
 
 jobs:
   test:
-    runs-on: [self-hosted, Linux, X64, geiserback]
+    runs-on: [self-hosted, Linux, X64]
     strategy:
       matrix:
         python-version: ["3.9", "3.10", "3.11"]
