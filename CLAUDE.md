@@ -1,4 +1,4 @@
-# AGENTS.md — Wayback-Archive
+# CLAUDE.md — Wayback-Archive
 
 ## Project Overview
 
