@@ -1,11 +1,14 @@
 name: Close stale issues
 on:
+  workflow_dispatch:
   schedule:
-    - cron: '0 0 * * *'
+    - cron:
+  workflow_dispatch: '0 0 * * *'
 
 jobs:
   stale:
-    runs-on: [self-hosted, Linux, X64]
+    runs-on:
+  workflow_dispatch: [self-hosted, Linux, X64]
     steps:
       - uses: actions/stale@v9
         with:
