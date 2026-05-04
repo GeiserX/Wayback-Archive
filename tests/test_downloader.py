@@ -185,3 +185,24 @@ class TestWaybackDownloader:
         # The background image must be queued for download
         assert "http://example.com/background.gif" in links_to_follow
 
+    def test_is_html_url_bare_host_and_root(self):
+        """Bare-host and root URLs are classified as HTML."""
+        for url in ["https://example.com", "https://example.com/"]:
+            assert WaybackDownloader._is_html_url(url), f"{url} should be HTML"
+
+    def test_is_html_url_html_extensions(self):
+        """HTML extensions are classified as HTML."""
+        assert WaybackDownloader._is_html_url("https://example.com/page.html")
+        assert WaybackDownloader._is_html_url("https://example.com/page.htm")
+
+    def test_is_html_url_extensionless_paths(self):
+        """Extensionless paths are classified as HTML."""
+        assert WaybackDownloader._is_html_url("https://example.com/about")
+        assert WaybackDownloader._is_html_url("https://example.com/foo/bar")
+
+    def test_is_html_url_asset_extensions(self):
+        """Known asset extensions are NOT classified as HTML."""
+        for ext in [".css", ".js", ".png", ".jpg", ".gif", ".svg", ".woff2", ".pdf", ".json", ".xml"]:
+            url = f"https://example.com/file{ext}"
+            assert not WaybackDownloader._is_html_url(url), f"{url} should NOT be HTML"
+
