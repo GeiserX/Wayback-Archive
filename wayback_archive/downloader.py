@@ -143,6 +143,24 @@ class WaybackDownloader:
         url_domain = parsed.netloc.lower().lstrip("www.")
         return any(domain in url_domain for domain in squarespace_domains)
 
+    @staticmethod
+    def _is_html_url(url: str, parsed=None) -> bool:
+        """Determine if a URL likely points to an HTML page based on its path."""
+        if parsed is None:
+            parsed = urlparse(url)
+        path_lower = parsed.path.lower()
+        if not path_lower or path_lower == "/":
+            return True
+        if path_lower.endswith('.html') or path_lower.endswith('.htm'):
+            return True
+        ext = os.path.splitext(path_lower)[1]
+        if ext:
+            return False
+        non_html = {'.css', '.js', '.jpg', '.jpeg', '.png', '.gif', '.svg',
+                    '.woff', '.woff2', '.ttf', '.eot', '.otf', '.ico',
+                    '.json', '.xml', '.txt', '.pdf'}
+        return not any(path_lower.endswith(e) for e in non_html)
+
     def _is_tracker(self, url: str) -> bool:
         """Check if URL is a tracker/analytics script."""
         for pattern in self.TRACKER_PATTERNS:
@@ -519,13 +537,7 @@ class WaybackDownloader:
         # Determine if this is an HTML page (we should NOT fallback to live for HTML)
         parsed = urlparse(url)
         path_lower = parsed.path.lower()
-        is_html_page = (
-            not path_lower or 
-            path_lower.endswith('.html') or 
-            path_lower.endswith('.htm') or
-            (not os.path.splitext(path_lower)[1] and 
-             not any(path_lower.endswith(ext) for ext in ['.css', '.js', '.jpg', '.jpeg', '.png', '.gif', '.svg', '.woff', '.woff2', '.ttf', '.eot', '.otf', '.ico', '.json', '.xml', '.pdf']))
-        )
+        is_html_page = self._is_html_url(url, parsed)
         
         # For HTML pages, try the 'if_' version first to get unwrapped content
         # This avoids the Wayback Machine interface wrapper
@@ -915,6 +927,7 @@ class WaybackDownloader:
     def _rewrite_css_urls(self, css: str, base_url: str) -> str:
         """Rewrite URLs in CSS to relative paths."""
         def replace_css_url(match):
+            """Rewrite a single CSS url() match to a relative local path."""
             full_match = match.group(0)
             url_part = match.group(1)
             
@@ -1720,6 +1733,7 @@ class WaybackDownloader:
             # Rewrite URLs in inline styles - handle url() functions
             if "web.archive.org" in style or "/web/" in style or "url(" in style:
                 def replace_url_in_style(match):
+                    """Rewrite a single url() inside an inline style attribute."""
                     full_match = match.group(0)
                     url_part = match.group(1) if len(match.groups()) > 0 else full_match
                     
@@ -1977,12 +1991,12 @@ class WaybackDownloader:
                 
                 # Try to detect from actual content if still unknown
                 if not content_type and len(content) > 0:
-                    # Check content signatures
-                    if content.startswith(b'<!DOCTYPE') or content.startswith(b'<html') or content.startswith(b'<HTML'):
+                    content_stripped = content.lstrip()
+                    if content_stripped.startswith((b'<!DOCTYPE', b'<!doctype', b'<html', b'<HTML')):
                         content_type = "text/html"
-                    elif content.startswith(b'/*') or content.startswith(b'@charset') or b'@media' in content[:200]:
+                    elif content_stripped.startswith((b'/*', b'@charset')) or b'@media' in content[:200]:
                         content_type = "text/css"
-                    elif content.startswith(b'<?xml') or b'<svg' in content[:200]:
+                    elif content_stripped.startswith(b'<?xml') or b'<svg' in content[:200]:
                         content_type = "image/svg+xml"
                     elif content.startswith(b'\x89PNG'):
                         content_type = "image/png"
@@ -2016,14 +2030,8 @@ class WaybackDownloader:
                 # Process based on content type - be more conservative about what we treat as HTML
                 is_html = (
                     not is_google_fonts_css and (
-                        content_type == "text/html" or 
-                        (not content_type and (
-                            url.endswith(".html") or
-                            url.endswith(".htm") or
-                            # Bare-host or root URLs (empty path or "/") are HTML.
-                            (not parsed.path or parsed.path == "/") or
-                            (parsed.path and not os.path.splitext(parsed.path)[1] and "?" not in url and not any(parsed.path.lower().endswith(ext) for ext in [".css", ".js", ".json", ".xml", ".txt"]))
-                        ))
+                        content_type == "text/html" or
+                        (not content_type and self._is_html_url(url, parsed))
                     )
                 )
                 
