@@ -927,6 +927,7 @@ class WaybackDownloader:
     def _rewrite_css_urls(self, css: str, base_url: str) -> str:
         """Rewrite URLs in CSS to relative paths."""
         def replace_css_url(match):
+            """Rewrite a single CSS url() match to a relative local path."""
             full_match = match.group(0)
             url_part = match.group(1)
             
@@ -1732,6 +1733,7 @@ class WaybackDownloader:
             # Rewrite URLs in inline styles - handle url() functions
             if "web.archive.org" in style or "/web/" in style or "url(" in style:
                 def replace_url_in_style(match):
+                    """Rewrite a single url() inside an inline style attribute."""
                     full_match = match.group(0)
                     url_part = match.group(1) if len(match.groups()) > 0 else full_match
                     
