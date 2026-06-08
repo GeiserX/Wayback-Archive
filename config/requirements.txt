@@ -1,5 +1,5 @@
 requests>=2.32.5
-beautifulsoup4>=4.14.3
+beautifulsoup4>=4.15.0
 minify-html>=0.18.1
 cssmin>=0.2.0
 rjsmin>=1.2.5
