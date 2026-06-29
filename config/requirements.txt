@@ -6,6 +6,6 @@ rjsmin>=1.2.5
 Pillow>=11.3.0
 lxml>=5.4.0
 urllib3>=2.7.0
-python-dotenv>=1.2.1
+python-dotenv>=1.2.2
 
 
