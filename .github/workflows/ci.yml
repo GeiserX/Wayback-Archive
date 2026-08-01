@@ -12,7 +12,9 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.9", "3.10", "3.11"]
+        # 3.9 reached end-of-life in Oct 2025 and current deps (requests >= 2.34)
+        # no longer publish wheels for it, which broke every dependency bump.
+        python-version: ["3.10", "3.11", "3.12"]
 
     steps:
     - uses: actions/checkout@v7
