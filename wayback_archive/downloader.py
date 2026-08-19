@@ -14,6 +14,10 @@ from bs4 import BeautifulSoup, Comment
 from wayback_archive.config import Config
 
 
+class UnsafeOutputPathError(ValueError):
+    """Raised when a downloaded URL would be written outside OUTPUT_DIR."""
+
+
 class WaybackDownloader:
     """Main downloader class for Wayback Machine archives."""
 
@@ -323,11 +327,86 @@ class WaybackDownloader:
 
         return url_normalized
 
+    # Path separators to split on. Backslash is included because Windows
+    # resolves it as a separator, so a percent-decoded "\\" must not survive
+    # inside a single path component.
+    _PATH_SEPARATORS = re.compile(r"[/\\]")
+
+    def _sanitize_output_relpath(self, path: str) -> str:
+        """
+        Collapse a URL-derived path into a safe path relative to output_dir.
+
+        Archived pages are third-party content we do not control, so their
+        URLs can contain "." and ".." segments - plain or percent-encoded -
+        that would otherwise make the downloader write outside OUTPUT_DIR.
+        This applies the same dot-segment removal a web server performs
+        before serving a file (RFC 3986 section 5.2.4): "a/../b" becomes "b",
+        and a ".." that would climb above the root is dropped.
+
+        Args:
+            path: A percent-decoded URL path, or a "domain/path" string.
+
+        Returns:
+            A relative path using "/" separators that cannot escape upwards.
+        """
+        # A drive letter or UNC prefix would make the later join absolute on
+        # Windows. splitdrive is a no-op on POSIX.
+        path = os.path.splitdrive(path)[1]
+
+        segments: List[str] = []
+        for segment in self._PATH_SEPARATORS.split(path):
+            # NUL is not writable in a filename and would raise on open().
+            segment = segment.replace("\x00", "")
+
+            # Windows silently trims trailing dots and spaces from a path
+            # component, so "..", ".. " and "..." all address the parent
+            # there. Treat any dots-and-spaces-only component as a relative
+            # reference rather than a real directory name.
+            if not segment.strip(" ."):
+                if ".." in segment and segments:
+                    segments.pop()
+                continue
+
+            segments.append(segment)
+
+        return "/".join(segments)
+
+    def _resolve_output_path(self, relative_path: str) -> Path:
+        """
+        Join a URL-derived path onto output_dir, guaranteeing containment.
+
+        Args:
+            relative_path: Path fragment derived from a downloaded URL.
+
+        Returns:
+            A path inside output_dir.
+
+        Raises:
+            UnsafeOutputPathError: If the result would land outside
+                output_dir. _sanitize_output_relpath makes this unreachable
+                for normal input; it is the backstop that keeps any future
+                or platform-specific gap from becoming an arbitrary write.
+        """
+        output_dir = Path(self.config.output_dir)
+        candidate = output_dir / self._sanitize_output_relpath(relative_path)
+
+        root = os.path.realpath(output_dir)
+        resolved = os.path.realpath(candidate)
+        if resolved != root and not resolved.startswith(root + os.sep):
+            raise UnsafeOutputPathError(
+                f"refusing to write outside output directory: {candidate}"
+            )
+
+        return candidate
+
     def _get_local_path(self, url: str) -> Path:
         """
         Get local file path for a URL.
         This ensures consistent file naming that works with static file servers.
         Files are saved without query strings or fragments for clean URLs.
+
+        Raises:
+            UnsafeOutputPathError: If the URL resolves outside output_dir.
         """
         parsed = urlparse(url)
         
@@ -339,7 +418,7 @@ class WaybackDownloader:
             # Remove leading slashes
             while domain_path.startswith("/"):
                 domain_path = domain_path[1:]
-            return Path(self.config.output_dir) / domain_path
+            return self._resolve_output_path(domain_path)
         
         # Special handling for Squarespace CDN - preserve domain structure
         # This prevents CDN root URLs from overwriting index.html
@@ -351,20 +430,20 @@ class WaybackDownloader:
             # If no path, add index.html under the domain folder
             if not parsed.path or parsed.path == "/":
                 domain_path = f"{parsed.netloc}/index.html"
-            return Path(self.config.output_dir) / domain_path
+            return self._resolve_output_path(domain_path)
         
         path = unquote(parsed.path)
-        
-        # Remove leading slashes (handle both single and double slashes)
-        while path.startswith("/"):
-            path = path[1:]
-        
-        # Clean up any double slashes in the middle of the path
-        while "//" in path:
-            path = path.replace("//", "/")
+
+        # A trailing slash means a directory; record it before dot-segment
+        # removal strips the trailing empty component.
+        is_directory = not path or path.endswith("/")
+
+        # Remove leading slashes, collapse duplicate slashes, and resolve
+        # "." / ".." segments so archived content cannot escape output_dir.
+        path = self._sanitize_output_relpath(path)
 
         # Default to index.html for directories
-        if not path or path.endswith("/"):
+        if is_directory or not path:
             path = "index.html"
 
         # Determine if this is likely a page (HTML) or an asset
@@ -391,7 +470,7 @@ class WaybackDownloader:
             else:
                 path = base_part + ".html"
 
-        return Path(self.config.output_dir) / path
+        return self._resolve_output_path(path)
     
     def _get_relative_link_path(self, url: str, is_page: bool = True) -> str:
         """
@@ -409,23 +488,25 @@ class WaybackDownloader:
         # Special handling for Google Fonts URLs - preserve domain structure
         if "fonts.googleapis.com" in parsed.netloc or "fonts.gstatic.com" in parsed.netloc:
             domain_path = f"{parsed.netloc}{parsed.path}"
-            while domain_path.startswith("/"):
-                domain_path = domain_path[1:]
-            path = f"/{domain_path}"
+            path = f"/{self._sanitize_output_relpath(domain_path)}"
 
         # Special handling for Squarespace CDN URLs - preserve domain structure
         elif self._is_squarespace_cdn(url):
             domain_path = f"{parsed.netloc}{parsed.path}"
-            while domain_path.startswith("/"):
-                domain_path = domain_path[1:]
-            path = f"/{domain_path}"
+            path = f"/{self._sanitize_output_relpath(domain_path)}"
 
         else:
             path = unquote(parsed.path)
 
             # Directory or root → index.html (matches _get_local_path behavior)
-            if not path or path.endswith("/"):
-                path = (path.rstrip("/") or "") + "/index.html"
+            is_directory = not path or path.endswith("/")
+
+            # Same dot-segment removal _get_local_path applies, so a rewritten
+            # link keeps pointing at the file that actually gets written.
+            path = "/" + self._sanitize_output_relpath(path)
+
+            if is_directory or path == "/":
+                path = path.rstrip("/") + "/index.html"
 
             # Determine if this has an asset extension
             known_asset_extensions = {
@@ -459,7 +540,11 @@ class WaybackDownloader:
         if current_url:
             from_parsed = urlparse(current_url)
             from_path = unquote(from_parsed.path)
-            if not from_path or from_path.endswith("/"):
+            from_is_directory = not from_path or from_path.endswith("/")
+            # Collapse the same way the page's own file path was collapsed,
+            # so the relative hop is computed against where it really lives.
+            from_path = "/" + self._sanitize_output_relpath(from_path)
+            if from_is_directory or from_path == "/":
                 from_dir = from_path.rstrip("/") or "/"
             else:
                 from_dir = posixpath.dirname(from_path)
@@ -2012,16 +2097,24 @@ class WaybackDownloader:
             
             # Use normalized URL (without query strings) for file paths
             # Exception: For Google Fonts CSS files, preserve query string in path for uniqueness
-            if "fonts.googleapis.com" in url and "/css" in url:
-                # For Google Fonts CSS, use query string hash to create unique filename
-                import hashlib
-                parsed_original = urlparse(url)
-                query_hash = hashlib.md5(parsed_original.query.encode()).hexdigest()[:8]
-                font_path = f"fonts.googleapis.com/css-{query_hash}.css"
-                local_path = self._get_local_path(f"http://{font_path}")
-            else:
-                local_path = self._get_local_path(normalized_for_tracking)
-            local_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                if "fonts.googleapis.com" in url and "/css" in url:
+                    # For Google Fonts CSS, use query string hash to create unique filename
+                    import hashlib
+                    parsed_original = urlparse(url)
+                    query_hash = hashlib.md5(parsed_original.query.encode()).hexdigest()[:8]
+                    font_path = f"fonts.googleapis.com/css-{query_hash}.css"
+                    local_path = self._get_local_path(f"http://{font_path}")
+                else:
+                    local_path = self._get_local_path(normalized_for_tracking)
+                local_path.parent.mkdir(parents=True, exist_ok=True)
+            except UnsafeOutputPathError as e:
+                # Archived content asked us to write outside OUTPUT_DIR. Skip
+                # this file and keep archiving the rest of the site.
+                files_downloaded -= 1
+                files_failed += 1
+                print(f"         ⛔ Refused unsafe path for {url}: {e}", flush=True)
+                continue
             
             try:
                 # Check for Google Fonts CSS files first (they don't have .css extension)
