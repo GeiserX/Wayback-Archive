@@ -446,49 +446,49 @@ class TestGetRelativeLinkPath:
 
     def test_page_gets_html_extension(self):
         self.dl._current_page_url = "http://example.com/index.html"
-        result = self.dl._get_relative_link_path("http://example.com/about", is_page=True)
+        result = self.dl._get_relative_link_path("http://example.com/about", "page")
         assert result.endswith(".html")
 
     def test_asset_keeps_extension(self):
         self.dl._current_page_url = "http://example.com/index.html"
-        result = self.dl._get_relative_link_path("http://example.com/style.css", is_page=False)
+        result = self.dl._get_relative_link_path("http://example.com/style.css", "asset")
         assert result.endswith(".css")
 
     def test_google_fonts_preserves_domain(self):
         self.dl._current_page_url = "http://example.com/index.html"
-        result = self.dl._get_relative_link_path("https://fonts.googleapis.com/css", is_page=False)
+        result = self.dl._get_relative_link_path("https://fonts.googleapis.com/css", "asset")
         assert "fonts.googleapis.com" in result
 
     def test_google_gstatic_preserves_domain(self):
         self.dl._current_page_url = "http://example.com/index.html"
-        result = self.dl._get_relative_link_path("https://fonts.gstatic.com/s/file.woff2", is_page=False)
+        result = self.dl._get_relative_link_path("https://fonts.gstatic.com/s/file.woff2", "asset")
         assert "fonts.gstatic.com" in result
 
     def test_squarespace_cdn_preserves_domain(self):
         self.dl._current_page_url = "http://example.com/index.html"
-        result = self.dl._get_relative_link_path("https://static1.squarespace.com/file.js", is_page=False)
+        result = self.dl._get_relative_link_path("https://static1.squarespace.com/file.js", "asset")
         assert "static1.squarespace.com" in result
 
     def test_relative_from_subdirectory(self):
         self.dl._current_page_url = "http://example.com/blog/post.html"
-        result = self.dl._get_relative_link_path("http://example.com/images/pic.jpg", is_page=False)
+        result = self.dl._get_relative_link_path("http://example.com/images/pic.jpg", "asset")
         assert ".." in result
 
     def test_no_current_page_url(self):
         """When _current_page_url is not set, path is returned as-is."""
         if hasattr(self.dl, '_current_page_url'):
             del self.dl._current_page_url
-        result = self.dl._get_relative_link_path("http://example.com/about", is_page=True)
+        result = self.dl._get_relative_link_path("http://example.com/about", "page")
         assert "about" in result
 
     def test_root_directory(self):
         self.dl._current_page_url = "http://example.com/"
-        result = self.dl._get_relative_link_path("http://example.com/page", is_page=True)
+        result = self.dl._get_relative_link_path("http://example.com/page", "page")
         assert "page" in result
 
     def test_preserves_query_and_fragment(self):
         self.dl._current_page_url = "http://example.com/index.html"
-        result = self.dl._get_relative_link_path("http://example.com/page?q=1#sec", is_page=True)
+        result = self.dl._get_relative_link_path("http://example.com/page?q=1#sec", "page")
         assert "?q=1" in result
         assert "#sec" in result
 
