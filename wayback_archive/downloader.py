@@ -6,7 +6,7 @@ import re
 import sys
 import mimetypes
 from datetime import datetime, timedelta
-from urllib.parse import urljoin, urlparse, unquote
+from urllib.parse import urljoin, urlparse, unquote, quote
 from pathlib import Path
 from typing import Optional, Set, Dict, List, Tuple
 import requests
@@ -232,14 +232,9 @@ class WaybackDownloader:
 
     def _make_relative_path(self, url: str) -> str:
         """Convert absolute URL to relative path."""
-        parsed = urlparse(url)
-        path = parsed.path or "/"
-        suffix = ""
-        if parsed.query:
-            suffix += "?" + parsed.query
-        if parsed.fragment:
-            suffix += "#" + parsed.fragment
-        return self._to_relative_path(path) + suffix
+        # CSS url() and data-* attributes point at the same files as HTML
+        # attributes do, so they go through the same builder.
+        return self._get_relative_link_path(url, is_page=False)
 
     def _extract_original_url_from_path(self, path: str) -> Optional[str]:
         """Extract original URL from Wayback Machine path in HTML."""
@@ -371,6 +366,24 @@ class WaybackDownloader:
 
         return "/".join(segments)
 
+    def _encode_link_path(self, path: str) -> str:
+        """
+        Percent-encode a decoded path so it is a valid URL reference.
+
+        On-disk paths are decoded; the links pointing at them must not be. A
+        file named "a#b.png" written into a link verbatim makes the browser
+        read "#b.png" as a fragment and fetch "a" instead, and "?" starts a
+        query string the same way. Encoding fixes both, and the browser
+        decodes it straight back to the real filename.
+
+        Args:
+            path: A decoded path, using "/" separators.
+
+        Returns:
+            The same path with reserved and non-ASCII characters escaped.
+        """
+        return quote(path, safe="/")
+
     def _resolve_output_path(self, relative_path: str) -> Path:
         """
         Join a URL-derived path onto output_dir, guaranteeing containment.
@@ -414,7 +427,7 @@ class WaybackDownloader:
         if "fonts.googleapis.com" in parsed.netloc or "fonts.gstatic.com" in parsed.netloc:
             # For Google Fonts, preserve the full domain and path structure
             # e.g., fonts.googleapis.com/css-abc123.css or fonts.gstatic.com/s/montserrat/v29/file.woff2
-            domain_path = f"{parsed.netloc}{parsed.path}"
+            domain_path = unquote(f"{parsed.netloc}{parsed.path}")
             # Remove leading slashes
             while domain_path.startswith("/"):
                 domain_path = domain_path[1:]
@@ -423,7 +436,7 @@ class WaybackDownloader:
         # Special handling for Squarespace CDN - preserve domain structure
         # This prevents CDN root URLs from overwriting index.html
         if self._is_squarespace_cdn(url):
-            domain_path = f"{parsed.netloc}{parsed.path}"
+            domain_path = unquote(f"{parsed.netloc}{parsed.path}")
             # Remove leading slashes
             while domain_path.startswith("/"):
                 domain_path = domain_path[1:]
@@ -442,9 +455,11 @@ class WaybackDownloader:
         # "." / ".." segments so archived content cannot escape output_dir.
         path = self._sanitize_output_relpath(path)
 
-        # Default to index.html for directories
+        # Directories get an index.html *inside* them. Replacing the whole
+        # path here instead made every /section/ page overwrite the root
+        # index.html, so only the last one archived survived.
         if is_directory or not path:
-            path = "index.html"
+            path = posixpath.join(path, "index.html")
 
         # Determine if this is likely a page (HTML) or an asset
         # Check if it has a known asset extension
@@ -472,87 +487,54 @@ class WaybackDownloader:
 
         return self._resolve_output_path(path)
     
+    def _output_relative_url(self, path: Path) -> str:
+        """
+        Express a path inside output_dir as a root-relative URL path.
+
+        Args:
+            path: A path from _get_local_path, or one of its parent dirs.
+
+        Returns:
+            The path relative to output_dir, with a leading "/".
+        """
+        relative = path.relative_to(Path(self.config.output_dir))
+        return "/" + "/".join(relative.parts)
+
     def _get_relative_link_path(self, url: str, is_page: bool = True) -> str:
         """
-        Get truly relative link path that matches where the file will be saved.
-        Paths are relative to the current page so files work when opened
-        directly from the filesystem (no web server required).
+        Get the link to write for a URL, relative to the current page.
+
+        The target comes from _get_local_path rather than being worked out a
+        second time, so a link cannot name a file the downloader does not
+        write. Paths are relative to the page doing the linking, so the
+        archive works opened straight from the filesystem with no web server.
 
         Args:
             url: The normalized URL to convert
-            is_page: If True, adds .html extension to paths without extensions.
-                     If False, preserves the original extension (for assets).
+            is_page: Ignored. Whether an extension is added is decided by the
+                     stored path; recomputing it here is what used to let the
+                     link and the file disagree.
         """
         parsed = urlparse(url)
 
-        # Special handling for Google Fonts URLs - preserve domain structure
-        if "fonts.googleapis.com" in parsed.netloc or "fonts.gstatic.com" in parsed.netloc:
-            domain_path = f"{parsed.netloc}{parsed.path}"
-            path = f"/{self._sanitize_output_relpath(domain_path)}"
-
-        # Special handling for Squarespace CDN URLs - preserve domain structure
-        elif self._is_squarespace_cdn(url):
-            domain_path = f"{parsed.netloc}{parsed.path}"
-            path = f"/{self._sanitize_output_relpath(domain_path)}"
-
-        else:
-            path = unquote(parsed.path)
-
-            # Directory or root → index.html (matches _get_local_path behavior)
-            is_directory = not path or path.endswith("/")
-
-            # Same dot-segment removal _get_local_path applies, so a rewritten
-            # link keeps pointing at the file that actually gets written.
-            path = "/" + self._sanitize_output_relpath(path)
-
-            if is_directory or path == "/":
-                path = path.rstrip("/") + "/index.html"
-
-            # Determine if this has an asset extension
-            known_asset_extensions = {
-                ".css", ".js", ".jpg", ".jpeg", ".png", ".gif", ".svg", ".webp",
-                ".ico", ".woff", ".woff2", ".ttf", ".eot", ".otf", ".pdf", ".zip",
-                ".mp4", ".mp3", ".avi", ".mov", ".wmv", ".flv", ".pdf", ".doc", ".docx"
-            }
-
-            has_extension = "." in os.path.basename(path)
-            is_asset = False
-            if has_extension:
-                ext = os.path.splitext(path)[1].lower()
-                is_asset = ext in known_asset_extensions
-
-            if is_page and not has_extension and not is_asset:
-                path = path + ".html"
-
-            # Ensure leading slash for relpath computation
-            if not path.startswith("/"):
-                path = "/" + path
-
-        # Collect query/fragment suffix (not part of file path)
+        # Query and fragment belong to the reference, not to the file.
         suffix = ""
         if parsed.query:
             suffix += "?" + parsed.query
         if parsed.fragment:
             suffix += "#" + parsed.fragment
 
-        # Compute truly relative path from the current page's directory
-        current_url = getattr(self, '_current_page_url', None)
+        path = self._output_relative_url(self._get_local_path(url))
+
+        # Hop from the directory holding the page that carries the link.
+        current_url = getattr(self, "_current_page_url", None)
         if current_url:
-            from_parsed = urlparse(current_url)
-            from_path = unquote(from_parsed.path)
-            from_is_directory = not from_path or from_path.endswith("/")
-            # Collapse the same way the page's own file path was collapsed,
-            # so the relative hop is computed against where it really lives.
-            from_path = "/" + self._sanitize_output_relpath(from_path)
-            if from_is_directory or from_path == "/":
-                from_dir = from_path.rstrip("/") or "/"
-            else:
-                from_dir = posixpath.dirname(from_path)
-            if not from_dir:
-                from_dir = "/"
+            from_dir = self._output_relative_url(
+                self._get_local_path(current_url).parent
+            )
             path = posixpath.relpath(path, from_dir)
 
-        return path + suffix
+        return self._encode_link_path(path) + suffix
 
     def _to_relative_path(self, abs_path: str) -> str:
         """Convert a root-absolute path to one relative to the current page."""
@@ -1815,50 +1797,14 @@ class WaybackDownloader:
                 if style_url not in self.config.visited_urls and (self._is_internal_url(style_url) or is_squarespace_cdn):
                     links_to_follow.append(style_url)
             
-            # Rewrite URLs in inline styles - handle url() functions
+            # Rewrite URLs in inline styles. This is the same job
+            # _rewrite_css_urls already does for <style> blocks and .css files.
+            # The hand-rolled version that used to live here only matched
+            # Wayback-form URLs, so a plain url(http://site/bg.png) was
+            # downloaded but never repointed at the local copy - the archived
+            # page kept calling out to the live site.
             if "web.archive.org" in style or "/web/" in style or "url(" in style:
-                def replace_url_in_style(match):
-                    """Rewrite a single url() inside an inline style attribute."""
-                    full_match = match.group(0)
-                    url_part = match.group(1) if len(match.groups()) > 0 else full_match
-                    
-                    # Extract original URL from wayback path
-                    original = self._extract_original_url_from_path(url_part)
-                    if original:
-                        url_part = original
-                    elif "web.archive.org" in url_part:
-                        # Try extracting from absolute wayback URL
-                        match_obj = re.search(r"/web/\d+[a-z]*(?:im_|cs_|js_|jm_)/(https?://[^\"\s'()]+)", url_part)
-                        if match_obj:
-                            url_part = match_obj.group(1)
-                    
-                    normalized = self._normalize_url(url_part, base_url)
-                    is_squarespace_cdn = self._is_squarespace_cdn(normalized)
-                    
-                    if self._is_internal_url(normalized) or is_squarespace_cdn:
-                        if self.config.make_internal_links_relative:
-                            if is_squarespace_cdn:
-                                parsed_resource = urlparse(normalized)
-                                resource_path = f"{parsed_resource.netloc}{parsed_resource.path}"
-                                while resource_path.startswith("/"):
-                                    resource_path = resource_path[1:]
-                                new_path = self._to_relative_path(f"/{resource_path}")
-                            else:
-                                new_path = self._make_relative_path(normalized)
-                            return f"url({new_path})"
-                        return f"url({normalized})"
-                    
-                    return full_match
-                
-                # Pattern for url() with wayback URLs in inline styles
-                url_patterns = [
-                    r'url\s*\(\s*["\']?(/web/\d+[a-z]*(?:im_|cs_|js_|jm_)/https?://[^"\'()]+)["\']?\s*\)',  # Relative wayback
-                    r'url\s*\(\s*["\']?(https?://web\.archive\.org/web/\d+[a-z]*(?:im_|cs_|js_|jm_)/https?://[^"\'()]+)["\']?\s*\)',  # Absolute wayback
-                    r'url\s*\(\s*["\']?(https?://web\.archive\.org/[^"\'()]+)["\']?\s*\)',  # Simple web.archive.org URL
-                ]
-                new_style = style
-                for pattern in url_patterns:
-                    new_style = re.sub(pattern, replace_url_in_style, new_style, flags=re.IGNORECASE)
+                new_style = self._rewrite_css_urls(style, base_url)
                 # Remove references to corrupted fonts from inline styles
                 new_style = self._remove_corrupted_fonts_from_css(new_style)
                 element["style"] = new_style
@@ -2219,8 +2165,17 @@ class WaybackDownloader:
                                     if is_google_font:
                                         print(f"         📥 Queued Google Font file for download: {css_url[:80]}...", flush=True)
                         
-                        # Rewrite URLs in CSS to relative paths
-                        css = self._rewrite_css_urls(css, url)
+                        # Rewrite URLs in CSS to relative paths. A stylesheet's
+                        # url() references resolve against the stylesheet's own
+                        # location, so make that the current page for the
+                        # rewrite - otherwise every link is computed from
+                        # whichever HTML page happened to be processed last.
+                        previous_page_url = getattr(self, "_current_page_url", None)
+                        self._current_page_url = url
+                        try:
+                            css = self._rewrite_css_urls(css, url)
+                        finally:
+                            self._current_page_url = previous_page_url
                         
                         # Check font URLs in CSS and detect corrupted ones proactively
                         # This ensures we catch corrupted fonts even if they haven't been downloaded yet
