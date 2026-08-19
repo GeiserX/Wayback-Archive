@@ -87,6 +87,9 @@ class WaybackDownloader:
         # How each stored path was first referenced, so the extension a URL
         # gets is decided once and every later lookup agrees with it.
         self._path_kinds: Dict[str, str] = {}
+        # The same answer keyed by the file finally written, so the download
+        # loop can tell a stylesheet from a page when the URL cannot.
+        self._kind_by_path: Dict[str, str] = {}
         self._parse_wayback_url()
 
     def _parse_wayback_url(self):
@@ -503,8 +506,9 @@ class WaybackDownloader:
         if not has_extension and not is_asset:
             if kind and path not in self._path_kinds:
                 self._path_kinds[path] = kind
+            resolved_kind = self._path_kinds.get(path) or kind or ""
             extension = self.EXTENSION_FOR_KIND.get(
-                self._path_kinds.get(path) or kind or "", self.DEFAULT_EXTENSION
+                resolved_kind, self.DEFAULT_EXTENSION
             )
 
             dir_part = os.path.dirname(path) if os.path.dirname(path) else ""
@@ -513,6 +517,11 @@ class WaybackDownloader:
                 path = os.path.join(dir_part, base_part + extension)
             else:
                 path = base_part + extension
+
+            resolved = self._resolve_output_path(path)
+            if resolved_kind:
+                self._kind_by_path[str(resolved)] = resolved_kind
+            return resolved
 
         return self._resolve_output_path(path)
     
@@ -1075,7 +1084,14 @@ class WaybackDownloader:
                             relative_path = "/" + relative_path
                         new_path = relative_path
                     else:
-                        new_path = self._make_relative_path(normalized)
+                        # @import names a stylesheet; a bare url() names an
+                        # asset, and the two want different extensions when
+                        # the URL carries none.
+                        preceding = match.string[:match.start()].rstrip()
+                        new_path = self._make_relative_path(
+                            normalized,
+                            "stylesheet" if preceding.endswith("@import") else "asset",
+                        )
                     return f"url({new_path})"
                 return f"url({normalized})"
             
@@ -2092,6 +2108,17 @@ class WaybackDownloader:
                 print(f"         ⛔ Refused unsafe path for {url}: {e}", flush=True)
                 continue
             
+            # A URL with no extension tells us nothing about its type, but the
+            # element that referenced it does. Without this an extensionless
+            # stylesheet sniffs as a page and gets rewritten as HTML - saved
+            # under .css but wrapped in <body>, with its @import untouched.
+            if not content_type:
+                referenced_kind = self._kind_by_path.get(str(local_path))
+                if referenced_kind == "stylesheet":
+                    content_type = "text/css"
+                elif referenced_kind == "script":
+                    content_type = "application/javascript"
+
             try:
                 # Check for Google Fonts CSS files first (they don't have .css extension)
                 is_google_fonts_css = "fonts.googleapis.com" in url and "/css" in url

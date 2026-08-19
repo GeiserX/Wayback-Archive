@@ -473,9 +473,56 @@ class TestExtensionlessAssetsEndToEnd:
         assert "css/main.css" in written
         assert "js/bundle.js" in written
 
+        # The name alone proves nothing: an extensionless URL sniffs as a page,
+        # so without the kind the stylesheet is run through the HTML processor
+        # and written into main.css wrapped in <body>.
+        stylesheet = (output_dir / "css" / "main.css").read_text("utf-8")
+        assert "body{color:red}" in stylesheet
+        assert "<body" not in stylesheet and "<html" not in stylesheet
+
+        script = (output_dir / "js" / "bundle.js").read_text("utf-8")
+        assert "var x=1;" in script
+        assert "<body" not in script and "<html" not in script
+
         index = (output_dir / "index.html").read_text("utf-8")
         references = re.findall(r'(?:href|src)=["\']?([^"\'>\s]+)', index)
         assert references, "the page lost its references"
         for reference in references:
             assert not reference.startswith("http"), f"{reference} still points at the live site"
             assert (output_dir / unquote(reference)).exists(), f"{reference} names no file"
+
+
+class TestStylesheetImportsAreFollowed:
+    """An extensionless stylesheet must still be treated as CSS."""
+
+    def teardown_method(self):
+        """Clean up after tests."""
+        os.environ.pop("WAYBACK_URL", None)
+
+    def test_import_is_downloaded_and_rewritten(self, tmp_path):
+        """@import inside an extensionless stylesheet resolves locally."""
+        pages = {
+            "http://example.com/": b"<html><head>"
+            b'<link rel="stylesheet" href="http://example.com/css/main">'
+            b"</head><body>x</body></html>",
+            "http://example.com/css/main": (
+                b'@import url("http://example.com/css/theme");\nbody{color:red}'
+            ),
+            "http://example.com/css/theme": b".theme{color:blue}",
+        }
+
+        output_dir = tmp_path / "output"
+        downloader = _make_downloader(output_dir)
+        downloader.download_file = lambda url: pages.get(url, b"DATA")
+        with contextlib.redirect_stdout(io.StringIO()):
+            downloader.download()
+
+        stylesheet = (output_dir / "css" / "main.css").read_text("utf-8")
+
+        # The import target is a stylesheet too, so it earns .css as well.
+        assert (output_dir / "css" / "theme.css").exists()
+        assert "theme.css" in stylesheet
+        assert "http://example.com" not in stylesheet
+        assert ".theme{color:blue}" in (
+            output_dir / "css" / "theme.css"
+        ).read_text("utf-8")
