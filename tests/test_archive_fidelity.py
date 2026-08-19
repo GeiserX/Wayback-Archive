@@ -313,3 +313,60 @@ class TestCdnAndFontLinksNameRealFiles:
         link = self.downloader._get_relative_link_path(url, is_page=False)
         resolved = self.downloader._resolve_output_path(unquote(link.split("?")[0]))
         assert resolved == self.downloader._get_local_path(url)
+
+
+class TestEveryLinkNamesItsFile:
+    """A sweep over URL shapes, because hand-picked fixtures kept missing cases.
+
+    Each of the defects above was a disagreement between the code that decides
+    where a file is written and the code that writes the link to it. This
+    checks the whole matrix at once rather than one shape at a time.
+    """
+
+    PATHS = [
+        "/", "/a", "/a/", "/a/b", "/a/b/", "/a/b/c.png", "/a/b/c.html",
+        "/index.html", "/a//b", "/a//b//", "/deep/nest/ed/dir/",
+        "/img%20name.png", "/a%23hash.png", "/a%3Fq.png", "/caf%C3%A9.png",
+        "/100%25.png", "/a%2fb.png", "/a%5cb.png", "/%2e%2e/up.png",
+        "/../up.png", "/a/../b.png", "/dot.dir/file", "/UPPER/Case.PNG",
+        "/a+b.png", "/a&b.png", "/a=b.png", "/a,b.png", "/~tilde/x.png",
+    ]
+
+    PAGES = [
+        "http://example.com/",
+        "http://example.com/a/",
+        "http://example.com/a/b/",
+        "http://example.com/a/b/page.html",
+    ]
+
+    def setup_method(self):
+        """Set up test fixtures."""
+        self.downloader = _make_downloader("/tmp/wayback-archive-fidelity")
+
+    def teardown_method(self):
+        """Clean up after tests."""
+        os.environ.pop("WAYBACK_URL", None)
+
+    def test_page_links_all_resolve(self):
+        """Resolve each link from its page's directory and land on the file.
+
+        Only page references are swept. An extensionless URL referenced as an
+        asset still mismatches: _get_local_path appends .html to anything
+        without a known asset extension, so /image/12345 is saved as
+        image/12345.html while the asset link stays /image/12345. Fixing that
+        needs the content type at path-resolution time, which is a separate
+        change.
+        """
+        mismatches = []
+        for page in self.PAGES:
+            self.downloader._current_page_url = page
+            page_dir = os.path.dirname(str(self.downloader._get_local_path(page)))
+            for path in self.PATHS:
+                url = "http://example.com" + path
+                local = self.downloader._get_local_path(url)
+                link = self.downloader._get_relative_link_path(url, is_page=True)
+                resolved = os.path.normpath(os.path.join(page_dir, unquote(link)))
+                if resolved != str(local):
+                    mismatches.append(f"from {page} -> {url}: {link!r} gives {resolved}, file is {local}")
+
+        assert not mismatches, "links that do not name their file:\n" + "\n".join(mismatches)
