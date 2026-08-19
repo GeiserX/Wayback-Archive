@@ -232,17 +232,9 @@ class WaybackDownloader:
 
     def _make_relative_path(self, url: str) -> str:
         """Convert absolute URL to relative path."""
-        parsed = urlparse(url)
-        # Decode and collapse exactly as _get_local_path does, so the link
-        # names the file that really gets written, then re-encode so what
-        # lands in the CSS is a valid URL reference.
-        path = "/" + self._sanitize_output_relpath(unquote(parsed.path))
-        suffix = ""
-        if parsed.query:
-            suffix += "?" + parsed.query
-        if parsed.fragment:
-            suffix += "#" + parsed.fragment
-        return self._encode_link_path(self._to_relative_path(path)) + suffix
+        # CSS url() and data-* attributes point at the same files as HTML
+        # attributes do, so they go through the same builder.
+        return self._get_relative_link_path(url, is_page=False)
 
     def _extract_original_url_from_path(self, path: str) -> Optional[str]:
         """Extract original URL from Wayback Machine path in HTML."""
@@ -495,89 +487,51 @@ class WaybackDownloader:
 
         return self._resolve_output_path(path)
     
+    def _output_relative_url(self, path: Path) -> str:
+        """
+        Express a path inside output_dir as a root-relative URL path.
+
+        Args:
+            path: A path from _get_local_path, or one of its parent dirs.
+
+        Returns:
+            The path relative to output_dir, with a leading "/".
+        """
+        relative = path.relative_to(Path(self.config.output_dir))
+        return "/" + "/".join(relative.parts)
+
     def _get_relative_link_path(self, url: str, is_page: bool = True) -> str:
         """
-        Get truly relative link path that matches where the file will be saved.
-        Paths are relative to the current page so files work when opened
-        directly from the filesystem (no web server required).
+        Get the link to write for a URL, relative to the current page.
+
+        The target comes from _get_local_path rather than being worked out a
+        second time, so a link cannot name a file the downloader does not
+        write. Paths are relative to the page doing the linking, so the
+        archive works opened straight from the filesystem with no web server.
 
         Args:
             url: The normalized URL to convert
-            is_page: If True, adds .html extension to paths without extensions.
-                     If False, preserves the original extension (for assets).
+            is_page: Ignored. Whether an extension is added is decided by the
+                     stored path; recomputing it here is what used to let the
+                     link and the file disagree.
         """
         parsed = urlparse(url)
 
-        # Special handling for Google Fonts URLs - preserve domain structure
-        if "fonts.googleapis.com" in parsed.netloc or "fonts.gstatic.com" in parsed.netloc:
-            domain_path = unquote(f"{parsed.netloc}{parsed.path}")
-            path = f"/{self._sanitize_output_relpath(domain_path)}"
-
-        # Special handling for Squarespace CDN URLs - preserve domain structure
-        elif self._is_squarespace_cdn(url):
-            domain_path = unquote(f"{parsed.netloc}{parsed.path}")
-            # Mirror _get_local_path: a CDN root URL is stored as index.html
-            # inside the domain folder, so the link has to name that file
-            # rather than the folder.
-            if not parsed.path or parsed.path == "/":
-                domain_path = f"{parsed.netloc}/index.html"
-            path = f"/{self._sanitize_output_relpath(domain_path)}"
-
-        else:
-            path = unquote(parsed.path)
-
-            # Directory or root → index.html (matches _get_local_path behavior)
-            is_directory = not path or path.endswith("/")
-
-            # Same dot-segment removal _get_local_path applies, so a rewritten
-            # link keeps pointing at the file that actually gets written.
-            path = "/" + self._sanitize_output_relpath(path)
-
-            if is_directory or path == "/":
-                path = path.rstrip("/") + "/index.html"
-
-            # Determine if this has an asset extension
-            known_asset_extensions = {
-                ".css", ".js", ".jpg", ".jpeg", ".png", ".gif", ".svg", ".webp",
-                ".ico", ".woff", ".woff2", ".ttf", ".eot", ".otf", ".pdf", ".zip",
-                ".mp4", ".mp3", ".avi", ".mov", ".wmv", ".flv", ".pdf", ".doc", ".docx"
-            }
-
-            has_extension = "." in os.path.basename(path)
-            is_asset = False
-            if has_extension:
-                ext = os.path.splitext(path)[1].lower()
-                is_asset = ext in known_asset_extensions
-
-            if is_page and not has_extension and not is_asset:
-                path = path + ".html"
-
-            # Ensure leading slash for relpath computation
-            if not path.startswith("/"):
-                path = "/" + path
-
-        # Collect query/fragment suffix (not part of file path)
+        # Query and fragment belong to the reference, not to the file.
         suffix = ""
         if parsed.query:
             suffix += "?" + parsed.query
         if parsed.fragment:
             suffix += "#" + parsed.fragment
 
-        # Compute truly relative path from the current page's directory
-        current_url = getattr(self, '_current_page_url', None)
+        path = self._output_relative_url(self._get_local_path(url))
+
+        # Hop from the directory holding the page that carries the link.
+        current_url = getattr(self, "_current_page_url", None)
         if current_url:
-            from_parsed = urlparse(current_url)
-            from_path = unquote(from_parsed.path)
-            from_is_directory = not from_path or from_path.endswith("/")
-            # Collapse the same way the page's own file path was collapsed,
-            # so the relative hop is computed against where it really lives.
-            from_path = "/" + self._sanitize_output_relpath(from_path)
-            if from_is_directory or from_path == "/":
-                from_dir = from_path.rstrip("/") or "/"
-            else:
-                from_dir = posixpath.dirname(from_path)
-            if not from_dir:
-                from_dir = "/"
+            from_dir = self._output_relative_url(
+                self._get_local_path(current_url).parent
+            )
             path = posixpath.relpath(path, from_dir)
 
         return self._encode_link_path(path) + suffix

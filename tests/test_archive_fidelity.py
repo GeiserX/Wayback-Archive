@@ -347,15 +347,12 @@ class TestEveryLinkNamesItsFile:
         """Clean up after tests."""
         os.environ.pop("WAYBACK_URL", None)
 
-    def test_page_links_all_resolve(self):
+    def test_every_link_resolves(self):
         """Resolve each link from its page's directory and land on the file.
 
-        Only page references are swept. An extensionless URL referenced as an
-        asset still mismatches: _get_local_path appends .html to anything
-        without a known asset extension, so /image/12345 is saved as
-        image/12345.html while the asset link stays /image/12345. Fixing that
-        needs the content type at path-resolution time, which is a separate
-        change.
+        Both reference kinds are swept. is_page used to change the answer,
+        which is how an extensionless asset ended up saved as
+        image/12345.html and linked as image/12345.
         """
         mismatches = []
         for page in self.PAGES:
@@ -364,9 +361,22 @@ class TestEveryLinkNamesItsFile:
             for path in self.PATHS:
                 url = "http://example.com" + path
                 local = self.downloader._get_local_path(url)
-                link = self.downloader._get_relative_link_path(url, is_page=True)
-                resolved = os.path.normpath(os.path.join(page_dir, unquote(link)))
-                if resolved != str(local):
-                    mismatches.append(f"from {page} -> {url}: {link!r} gives {resolved}, file is {local}")
+                for is_page in (True, False):
+                    link = self.downloader._get_relative_link_path(url, is_page=is_page)
+                    resolved = os.path.normpath(os.path.join(page_dir, unquote(link)))
+                    if resolved != str(local):
+                        mismatches.append(
+                            f"from {page} -> {url} (is_page={is_page}): "
+                            f"{link!r} gives {resolved}, file is {local}"
+                        )
 
         assert not mismatches, "links that do not name their file:\n" + "\n".join(mismatches)
+
+    def test_both_builders_stay_in_step(self):
+        """The CSS builder and the HTML builder must not drift apart again."""
+        self.downloader._current_page_url = "http://example.com/a/b/"
+        for path in self.PATHS:
+            url = "http://example.com" + path
+            assert self.downloader._make_relative_path(
+                url
+            ) == self.downloader._get_relative_link_path(url, is_page=False), url
