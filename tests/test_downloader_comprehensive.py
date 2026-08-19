@@ -418,8 +418,10 @@ class TestGetLocalPath:
         assert "//" not in str(path).replace("://", "")  # ignore protocol
 
     def test_path_with_trailing_slash(self):
+        # Assert the whole path: checking only .name passes either way, which
+        # is how /blog/ overwriting the root index.html went unnoticed.
         path = self.dl._get_local_path("http://example.com/blog/")
-        assert path.name == "index.html"
+        assert path == self.dl._resolve_output_path("blog/index.html")
 
     def test_encoded_path(self):
         path = self.dl._get_local_path("http://example.com/path%20with%20spaces/file.html")
