@@ -282,3 +282,34 @@ class TestStylesheetLinksAreRelativeToTheStylesheet:
         target = (css_file.parent / unquote(match.group(1))).resolve()
         assert target == (output_dir / "i" / "tile.png").resolve()
         assert target.exists()
+
+
+class TestCdnAndFontLinksNameRealFiles:
+    """Every branch of the path builders must agree with its link builder."""
+
+    def setup_method(self):
+        """Set up test fixtures."""
+        self.downloader = _make_downloader("/tmp/wayback-archive-fidelity")
+        self.downloader._current_page_url = "http://example.com/"
+
+    def teardown_method(self):
+        """Clean up after tests."""
+        os.environ.pop("WAYBACK_URL", None)
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            # A CDN root is saved as index.html inside the domain folder; the
+            # link used to name the folder instead.
+            "https://images.squarespace-cdn.com/",
+            "https://images.squarespace-cdn.com/content/v1/abc/a%20b.png",
+            "https://static1.squarespace.com/static/file.js",
+            "https://fonts.gstatic.com/s/mont/v29/f.woff2",
+            "https://fonts.gstatic.com/s/mont/v29/a%20b.woff2",
+        ],
+    )
+    def test_link_resolves_to_the_written_file(self, url):
+        """Decoding the link must land on the file the downloader writes."""
+        link = self.downloader._get_relative_link_path(url, is_page=False)
+        resolved = self.downloader._resolve_output_path(unquote(link.split("?")[0]))
+        assert resolved == self.downloader._get_local_path(url)

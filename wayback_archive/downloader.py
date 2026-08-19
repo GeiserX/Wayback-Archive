@@ -516,6 +516,11 @@ class WaybackDownloader:
         # Special handling for Squarespace CDN URLs - preserve domain structure
         elif self._is_squarespace_cdn(url):
             domain_path = unquote(f"{parsed.netloc}{parsed.path}")
+            # Mirror _get_local_path: a CDN root URL is stored as index.html
+            # inside the domain folder, so the link has to name that file
+            # rather than the folder.
+            if not parsed.path or parsed.path == "/":
+                domain_path = f"{parsed.netloc}/index.html"
             path = f"/{self._sanitize_output_relpath(domain_path)}"
 
         else:
