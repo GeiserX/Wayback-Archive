@@ -526,3 +526,69 @@ class TestStylesheetImportsAreFollowed:
         assert ".theme{color:blue}" in (
             output_dir / "css" / "theme.css"
         ).read_text("utf-8")
+
+
+class TestReferenceKindSurvivesConfigAndCdnPaths:
+    """The kind has to be recorded wherever the resource is discovered.
+
+    Recording it only where links are rewritten leaves two holes: the whole
+    rewrite is skipped when MAKE_INTERNAL_LINKS_RELATIVE is off, and the CDN
+    branches build their path before the naming rule is applied.
+    """
+
+    def teardown_method(self):
+        """Clean up after tests."""
+        os.environ.pop("WAYBACK_URL", None)
+        os.environ.pop("MAKE_INTERNAL_LINKS_RELATIVE", None)
+
+    def _archive(self, tmp_path, href, relative="true"):
+        """Archive a page carrying one extensionless stylesheet."""
+        page = (
+            f'<html><head><link rel="stylesheet" href="{href}">'
+            "</head><body>x</body></html>"
+        ).encode()
+        os.environ["MAKE_INTERNAL_LINKS_RELATIVE"] = relative
+        output_dir = tmp_path / "output"
+        downloader = _make_downloader(output_dir)
+        downloader.download_file = lambda url: (
+            page if url == "http://example.com/" else b"body{color:red}"
+        )
+        with contextlib.redirect_stdout(io.StringIO()):
+            downloader.download()
+        return output_dir
+
+    def test_absolute_links_still_name_the_stylesheet_correctly(self, tmp_path):
+        """With link rewriting off the stylesheet is still CSS."""
+        output_dir = self._archive(
+            tmp_path, "http://example.com/css/main", relative="false"
+        )
+
+        stylesheet = output_dir / "css" / "main.css"
+        assert stylesheet.exists(), sorted(
+            str(p.relative_to(output_dir)) for p in output_dir.rglob("*") if p.is_file()
+        )
+        assert stylesheet.read_text("utf-8") == "body{color:red}"
+
+    def test_cdn_stylesheet_gets_its_extension(self, tmp_path):
+        """The CDN branch builds its own path and must still be named."""
+        output_dir = self._archive(
+            tmp_path, "https://static1.squarespace.com/static/css/main"
+        )
+
+        stylesheet = (
+            output_dir / "static1.squarespace.com" / "static" / "css" / "main.css"
+        )
+        assert stylesheet.exists(), sorted(
+            str(p.relative_to(output_dir)) for p in output_dir.rglob("*") if p.is_file()
+        )
+        assert stylesheet.read_text("utf-8") == "body{color:red}"
+
+    def test_cdn_assets_that_already_have_a_name_are_untouched(self, tmp_path):
+        """Only an extensionless CDN path gets an extension added."""
+        downloader = _make_downloader("/tmp/wayback-archive-fidelity")
+        path = downloader._get_local_path(
+            "https://static1.squarespace.com/static/file.js", "script"
+        )
+        assert path == downloader._resolve_output_path(
+            "static1.squarespace.com/static/file.js"
+        )
