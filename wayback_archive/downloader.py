@@ -61,6 +61,18 @@ class WaybackDownloader:
         r"^callto:",
     ]
 
+    # Extension to give a URL that carries none, chosen by how it was
+    # referenced. A stylesheet or a script has to land on the right extension
+    # or a web server sends the wrong Content-Type and the browser refuses
+    # the file. Anything else keeps the historical .html: browsers sniff
+    # images and media regardless, and guessing wrong there would rename
+    # files that work today.
+    EXTENSION_FOR_KIND = {
+        "stylesheet": ".css",
+        "script": ".js",
+    }
+    DEFAULT_EXTENSION = ".html"
+
     def __init__(self, config: Config):
         """Initialize downloader with configuration."""
         self.config = config
@@ -72,6 +84,12 @@ class WaybackDownloader:
         )
         # Track corrupted font files (HTML error pages instead of actual fonts)
         self.corrupted_fonts: Set[str] = set()
+        # How each stored path was first referenced, so the extension a URL
+        # gets is decided once and every later lookup agrees with it.
+        self._path_kinds: Dict[str, str] = {}
+        # The same answer keyed by the file finally written, so the download
+        # loop can tell a stylesheet from a page when the URL cannot.
+        self._kind_by_path: Dict[str, str] = {}
         self._parse_wayback_url()
 
     def _parse_wayback_url(self):
@@ -230,11 +248,11 @@ class WaybackDownloader:
             return f"https://web.archive.org/web/{timestamp}{asset_prefix}/{url}"
         return f"https://web.archive.org/web/{timestamp}/{url}"
 
-    def _make_relative_path(self, url: str) -> str:
+    def _make_relative_path(self, url: str, kind: str = "asset") -> str:
         """Convert absolute URL to relative path."""
         # CSS url() and data-* attributes point at the same files as HTML
         # attributes do, so they go through the same builder.
-        return self._get_relative_link_path(url, is_page=False)
+        return self._get_relative_link_path(url, kind)
 
     def _extract_original_url_from_path(self, path: str) -> Optional[str]:
         """Extract original URL from Wayback Machine path in HTML."""
@@ -384,6 +402,62 @@ class WaybackDownloader:
         """
         return quote(path, safe="/")
 
+    def _note_reference_kind(self, url: str, kind: str) -> None:
+        """
+        Record what a URL is, whether or not its link gets rewritten.
+
+        With make_internal_links_relative off nothing calls the link builder,
+        so without this the download loop meets an extensionless stylesheet
+        with no context, treats it as a page, and rewrites the CSS as HTML.
+
+        Args:
+            url: The normalized URL of the referenced resource.
+            kind: "stylesheet", "script", ...
+        """
+        try:
+            self._get_local_path(url, kind)
+        except UnsafeOutputPathError:
+            # The download loop will refuse this URL as well; nothing to note.
+            pass
+
+    def _place_in_output(
+        self, path: str, kind: Optional[str], default_extension: str
+    ) -> Path:
+        """
+        Resolve a URL-derived path inside output_dir, naming it by its kind.
+
+        A path with no file extension gets one chosen by how the URL was
+        first referenced, and that choice is remembered: the download loop
+        resolves the same URL again with no context, and both answers have
+        to name the same file.
+
+        Args:
+            path: Relative path derived from the URL.
+            kind: How the URL was referenced, or None where not known.
+            default_extension: Used when the kind says nothing - ".html" for
+                site paths, "" for CDN paths that are stored verbatim.
+
+        Returns:
+            A path inside output_dir.
+        """
+        if "." in os.path.basename(path):
+            return self._resolve_output_path(path)
+
+        if kind and path not in self._path_kinds:
+            self._path_kinds[path] = kind
+        resolved_kind = self._path_kinds.get(path) or kind or ""
+        extension = self.EXTENSION_FOR_KIND.get(resolved_kind, default_extension)
+
+        if extension:
+            directory = os.path.dirname(path)
+            base = os.path.basename(path) or "index"
+            path = os.path.join(directory, base + extension) if directory else base + extension
+
+        resolved = self._resolve_output_path(path)
+        if resolved_kind:
+            self._kind_by_path[str(resolved)] = resolved_kind
+        return resolved
+
     def _resolve_output_path(self, relative_path: str) -> Path:
         """
         Join a URL-derived path onto output_dir, guaranteeing containment.
@@ -412,11 +486,19 @@ class WaybackDownloader:
 
         return candidate
 
-    def _get_local_path(self, url: str) -> Path:
+    def _get_local_path(self, url: str, kind: Optional[str] = None) -> Path:
         """
         Get local file path for a URL.
         This ensures consistent file naming that works with static file servers.
         Files are saved without query strings or fragments for clean URLs.
+
+        Args:
+            url: The URL to place on disk.
+            kind: How the URL was referenced ("stylesheet", "script", "page",
+                  ...). Only used to pick an extension for a URL that has
+                  none. The first kind seen for a path wins, because the
+                  download loop resolves the same URL again with no context
+                  and both answers have to name the same file.
 
         Raises:
             UnsafeOutputPathError: If the URL resolves outside output_dir.
@@ -431,7 +513,9 @@ class WaybackDownloader:
             # Remove leading slashes
             while domain_path.startswith("/"):
                 domain_path = domain_path[1:]
-            return self._resolve_output_path(domain_path)
+            # Default to no extension: these paths are stored verbatim, and
+            # only a known stylesheet or script earns one.
+            return self._place_in_output(domain_path, kind, "")
         
         # Special handling for Squarespace CDN - preserve domain structure
         # This prevents CDN root URLs from overwriting index.html
@@ -443,7 +527,7 @@ class WaybackDownloader:
             # If no path, add index.html under the domain folder
             if not parsed.path or parsed.path == "/":
                 domain_path = f"{parsed.netloc}/index.html"
-            return self._resolve_output_path(domain_path)
+            return self._place_in_output(domain_path, kind, "")
         
         path = unquote(parsed.path)
 
@@ -461,31 +545,9 @@ class WaybackDownloader:
         if is_directory or not path:
             path = posixpath.join(path, "index.html")
 
-        # Determine if this is likely a page (HTML) or an asset
-        # Check if it has a known asset extension
-        known_asset_extensions = {
-            ".css", ".js", ".jpg", ".jpeg", ".png", ".gif", ".svg", ".webp", 
-            ".ico", ".woff", ".woff2", ".ttf", ".eot", ".otf", ".pdf", ".zip",
-            ".mp4", ".mp3", ".avi", ".mov", ".wmv", ".flv", ".pdf", ".doc", ".docx"
-        }
-        
-        has_extension = "." in os.path.basename(path)
-        is_asset = False
-        if has_extension:
-            ext = os.path.splitext(path)[1].lower()
-            is_asset = ext in known_asset_extensions
-
-        # Add .html extension if no extension and it's not an asset (treat as page)
-        if not has_extension and not is_asset:
-            # If the path doesn't have a file extension, treat it as a page
-            dir_part = os.path.dirname(path) if os.path.dirname(path) else ""
-            base_part = os.path.basename(path) if os.path.basename(path) else "index"
-            if dir_part:
-                path = os.path.join(dir_part, base_part + ".html")
-            else:
-                path = base_part + ".html"
-
-        return self._resolve_output_path(path)
+        # A path with no extension is treated as a page unless the reference
+        # said otherwise.
+        return self._place_in_output(path, kind, self.DEFAULT_EXTENSION)
     
     def _output_relative_url(self, path: Path) -> str:
         """
@@ -500,7 +562,7 @@ class WaybackDownloader:
         relative = path.relative_to(Path(self.config.output_dir))
         return "/" + "/".join(relative.parts)
 
-    def _get_relative_link_path(self, url: str, is_page: bool = True) -> str:
+    def _get_relative_link_path(self, url: str, kind: str = "page") -> str:
         """
         Get the link to write for a URL, relative to the current page.
 
@@ -511,9 +573,10 @@ class WaybackDownloader:
 
         Args:
             url: The normalized URL to convert
-            is_page: Ignored. Whether an extension is added is decided by the
-                     stored path; recomputing it here is what used to let the
-                     link and the file disagree.
+            kind: How this reference uses the URL - "page", "stylesheet",
+                  "script", "image" or "asset". Passed to _get_local_path,
+                  which needs it only to pick an extension for a URL that
+                  carries none.
         """
         parsed = urlparse(url)
 
@@ -524,7 +587,7 @@ class WaybackDownloader:
         if parsed.fragment:
             suffix += "#" + parsed.fragment
 
-        path = self._output_relative_url(self._get_local_path(url))
+        path = self._output_relative_url(self._get_local_path(url, kind))
 
         # Hop from the directory holding the page that carries the link.
         current_url = getattr(self, "_current_page_url", None)
@@ -1022,6 +1085,18 @@ class WaybackDownloader:
             is_google_font = "fonts.gstatic.com" in normalized or "fonts.googleapis.com" in normalized
             is_squarespace_cdn = self._is_squarespace_cdn(normalized)
             if self._is_internal_url(normalized) or is_google_font or is_squarespace_cdn:
+                # @import names a stylesheet; a bare url() names an asset, and
+                # the two want different extensions when the URL carries none.
+                preceding = match.string[:match.start()].rstrip()
+                reference_kind = "stylesheet" if preceding.endswith("@import") else "asset"
+                if reference_kind == "stylesheet":
+                    # Note it before the branch below, which does not run at
+                    # all with relative links off - the imported stylesheet
+                    # would then be downloaded as a page and rewritten as HTML.
+                    # Only a stylesheet is worth pinning: recording "asset"
+                    # would freeze the name for any later reference.
+                    self._note_reference_kind(normalized, reference_kind)
+
                 if self.config.make_internal_links_relative:
                     # For Google Fonts, construct relative path from the normalized URL
                     if is_google_font:
@@ -1045,7 +1120,7 @@ class WaybackDownloader:
                             relative_path = "/" + relative_path
                         new_path = relative_path
                     else:
-                        new_path = self._make_relative_path(normalized)
+                        new_path = self._make_relative_path(normalized, reference_kind)
                     return f"url({new_path})"
                 return f"url({normalized})"
             
@@ -1276,7 +1351,7 @@ class WaybackDownloader:
             if self._is_internal_url(normalized_url):
                 if self.config.make_internal_links_relative:
                     # Frame content is HTML pages
-                    frame["src"] = self._get_relative_link_path(normalized_url, is_page=True)
+                    frame["src"] = self._get_relative_link_path(normalized_url, "page")
                 else:
                     frame["src"] = normalized_url
 
@@ -1462,7 +1537,7 @@ class WaybackDownloader:
             normalized_url = self._normalize_url(original_url, base_url)
             if self.config.make_internal_links_relative:
                 # Use _get_relative_link_path to ensure links match saved file paths
-                relative_path = self._get_relative_link_path(normalized_url, is_page=True)
+                relative_path = self._get_relative_link_path(normalized_url, "page")
                 link["href"] = relative_path
             else:
                 if self.config.make_non_www or self.config.make_www:
@@ -1502,7 +1577,7 @@ class WaybackDownloader:
                             img_path = img_path[1:]
                         img["src"] = self._to_relative_path(f"/{img_path}")
                     else:
-                        img["src"] = self._get_relative_link_path(normalized_url, is_page=False)
+                        img["src"] = self._get_relative_link_path(normalized_url, "image")
                 else:
                     img["src"] = normalized_url
 
@@ -1521,7 +1596,7 @@ class WaybackDownloader:
             normalized_url = self._normalize_url(bg, base_url)
             if self._is_internal_url(normalized_url):
                 if self.config.make_internal_links_relative:
-                    elem["background"] = self._get_relative_link_path(normalized_url, is_page=False)
+                    elem["background"] = self._get_relative_link_path(normalized_url, "image")
                 else:
                     elem["background"] = normalized_url
                 if normalized_url not in self.config.visited_urls:
@@ -1584,7 +1659,7 @@ class WaybackDownloader:
                             else:
                                 srcset_parts.append(f"{normalized_srcset}{descriptor}")
                         else:
-                            relative_path = self._get_relative_link_path(normalized_srcset, is_page=False)
+                            relative_path = self._get_relative_link_path(normalized_srcset, "image")
                             srcset_parts.append(f"{relative_path}{descriptor}")
                     else:
                         # Keep external URLs as-is
@@ -1614,7 +1689,7 @@ class WaybackDownloader:
                                 img_path = img_path[1:]
                             img["src"] = self._to_relative_path(f"/{img_path}")
                         else:
-                            img["src"] = self._get_relative_link_path(normalized_url, is_page=False)
+                            img["src"] = self._get_relative_link_path(normalized_url, "image")
                     else:
                         img["src"] = normalized_url
 
@@ -1674,7 +1749,7 @@ class WaybackDownloader:
                         local_resource_path = self._get_local_path(f"http://{resource_path}")
                         # Get relative path for HTML
                         if self.config.make_internal_links_relative:
-                            relative_path = self._get_relative_link_path(f"http://{resource_path}", is_page=False)
+                            relative_path = self._get_relative_link_path(f"http://{resource_path}", "asset")
                             link["href"] = relative_path
                         else:
                             link["href"] = self._to_relative_path(f"/{resource_path}")
@@ -1688,9 +1763,14 @@ class WaybackDownloader:
                     link["href"] = normalized_url if normalized_url.startswith(("http://", "https://")) else href
                 continue
 
+            # Note what this is before the branch: with relative links off
+            # nothing below records it, and the download loop would treat an
+            # extensionless stylesheet as a page.
+            self._note_reference_kind(normalized_url, "stylesheet")
+
             if self.config.make_internal_links_relative:
                 # CSS files are assets, preserve extension
-                link["href"] = self._get_relative_link_path(normalized_url, is_page=False)
+                link["href"] = self._get_relative_link_path(normalized_url, "stylesheet")
             else:
                 link["href"] = normalized_url
 
@@ -1714,9 +1794,11 @@ class WaybackDownloader:
             normalized_url = self._normalize_url(src, base_url)
 
             if self._is_internal_url(normalized_url):
+                self._note_reference_kind(normalized_url, "script")
+
                 if self.config.make_internal_links_relative:
                     # JavaScript files are assets, preserve extension
-                    script["src"] = self._get_relative_link_path(normalized_url, is_page=False)
+                    script["src"] = self._get_relative_link_path(normalized_url, "script")
                 else:
                     script["src"] = normalized_url
 
@@ -1854,7 +1936,7 @@ class WaybackDownloader:
                                     asset_path = asset_path[1:]
                                 element[attr_name] = self._to_relative_path(f"/{asset_path}")
                             else:
-                                relative_path = self._get_relative_link_path(normalized, is_page=False)
+                                relative_path = self._get_relative_link_path(normalized, "asset")
                                 element[attr_name] = relative_path
                         elif self._is_internal_url(normalized) or is_squarespace_cdn:
                             # Keep normalized URL but ensure it uses the correct scheme
@@ -1889,7 +1971,7 @@ class WaybackDownloader:
                                     asset_path = asset_path[1:]
                                 element[attr_name] = self._to_relative_path(f"/{asset_path}")
                             else:
-                                relative_path = self._get_relative_link_path(normalized, is_page=False)
+                                relative_path = self._get_relative_link_path(normalized, "asset")
                                 element[attr_name] = relative_path
                         elif self._is_internal_url(normalized) or is_sqcdn_norm:
                             element[attr_name] = normalized
@@ -2062,6 +2144,17 @@ class WaybackDownloader:
                 print(f"         ⛔ Refused unsafe path for {url}: {e}", flush=True)
                 continue
             
+            # A URL with no extension tells us nothing about its type, but the
+            # element that referenced it does. Without this an extensionless
+            # stylesheet sniffs as a page and gets rewritten as HTML - saved
+            # under .css but wrapped in <body>, with its @import untouched.
+            if not content_type:
+                referenced_kind = self._kind_by_path.get(str(local_path))
+                if referenced_kind == "stylesheet":
+                    content_type = "text/css"
+                elif referenced_kind == "script":
+                    content_type = "application/javascript"
+
             try:
                 # Check for Google Fonts CSS files first (they don't have .css extension)
                 is_google_fonts_css = "fonts.googleapis.com" in url and "/css" in url

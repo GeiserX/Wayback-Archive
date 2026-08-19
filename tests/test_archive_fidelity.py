@@ -78,7 +78,7 @@ class TestDirectoryPagesGetTheirOwnIndex:
     def test_link_and_file_agree_for_directory_urls(self, url):
         """The link written into the HTML must name the file on disk."""
         self.downloader._current_page_url = "http://example.com/"
-        link = self.downloader._get_relative_link_path(url, is_page=True)
+        link = self.downloader._get_relative_link_path(url, "page")
         local_path = self.downloader._get_local_path(url)
         assert self.downloader._resolve_output_path(unquote(link)) == local_path
 
@@ -205,7 +205,7 @@ class TestLinksArePercentEncoded:
     def test_reserved_characters_are_escaped(self, url, filename, link):
         """The file keeps its real name and the link escapes it."""
         assert self.downloader._get_local_path(url).name == filename
-        assert self.downloader._get_relative_link_path(url, is_page=False) == link
+        assert self.downloader._get_relative_link_path(url, "asset") == link
 
     @pytest.mark.parametrize(
         "url",
@@ -220,7 +220,7 @@ class TestLinksArePercentEncoded:
     def test_both_rewriters_agree(self, url):
         """HTML attributes and CSS url() must produce the same link."""
         assert self.downloader._get_relative_link_path(
-            url, is_page=False
+            url, "asset"
         ) == self.downloader._make_relative_path(url)
 
     @pytest.mark.parametrize(
@@ -235,14 +235,14 @@ class TestLinksArePercentEncoded:
     )
     def test_link_decodes_back_to_the_written_file(self, url):
         """Decoding a link the way a browser does must find the real file."""
-        link = self.downloader._get_relative_link_path(url, is_page=False)
+        link = self.downloader._get_relative_link_path(url, "asset")
         resolved = self.downloader._resolve_output_path(unquote(link))
         assert resolved == self.downloader._get_local_path(url)
 
     def test_query_and_fragment_are_not_escaped(self):
         """Only the path is escaped; a real query string stays a query string."""
         link = self.downloader._get_relative_link_path(
-            "http://example.com/page?q=1#sec", is_page=True
+            "http://example.com/page?q=1#sec", "page"
         )
         assert link.endswith("?q=1#sec")
 
@@ -310,7 +310,7 @@ class TestCdnAndFontLinksNameRealFiles:
     )
     def test_link_resolves_to_the_written_file(self, url):
         """Decoding the link must land on the file the downloader writes."""
-        link = self.downloader._get_relative_link_path(url, is_page=False)
+        link = self.downloader._get_relative_link_path(url, "asset")
         resolved = self.downloader._resolve_output_path(unquote(link.split("?")[0]))
         assert resolved == self.downloader._get_local_path(url)
 
@@ -350,9 +350,9 @@ class TestEveryLinkNamesItsFile:
     def test_every_link_resolves(self):
         """Resolve each link from its page's directory and land on the file.
 
-        Both reference kinds are swept. is_page used to change the answer,
-        which is how an extensionless asset ended up saved as
-        image/12345.html and linked as image/12345.
+        Both reference kinds are swept. The kind used to change the link
+        without changing the file, which is how an extensionless asset ended
+        up saved as image/12345.html and linked as image/12345.
         """
         mismatches = []
         for page in self.PAGES:
@@ -361,12 +361,12 @@ class TestEveryLinkNamesItsFile:
             for path in self.PATHS:
                 url = "http://example.com" + path
                 local = self.downloader._get_local_path(url)
-                for is_page in (True, False):
-                    link = self.downloader._get_relative_link_path(url, is_page=is_page)
+                for kind in ("page", "asset"):
+                    link = self.downloader._get_relative_link_path(url, kind)
                     resolved = os.path.normpath(os.path.join(page_dir, unquote(link)))
                     if resolved != str(local):
                         mismatches.append(
-                            f"from {page} -> {url} (is_page={is_page}): "
+                            f"from {page} -> {url} (kind={kind}): "
                             f"{link!r} gives {resolved}, file is {local}"
                         )
 
@@ -379,4 +379,313 @@ class TestEveryLinkNamesItsFile:
             url = "http://example.com" + path
             assert self.downloader._make_relative_path(
                 url
-            ) == self.downloader._get_relative_link_path(url, is_page=False), url
+            ) == self.downloader._get_relative_link_path(url, "asset"), url
+
+
+class TestExtensionlessAssetsGetTheRightExtension:
+    """A URL with no extension is named by how it was referenced.
+
+    A stylesheet or script saved as .html is served as text/html, and a
+    browser in standards mode refuses it. Images and media are sniffed, so
+    those keep the historical .html rather than risk renaming files that
+    already work.
+    """
+
+    def setup_method(self):
+        """Set up test fixtures."""
+        self.downloader = _make_downloader("/tmp/wayback-archive-fidelity")
+
+    def teardown_method(self):
+        """Clean up after tests."""
+        os.environ.pop("WAYBACK_URL", None)
+
+    @pytest.mark.parametrize(
+        "kind,expected",
+        [
+            ("stylesheet", "css/main.css"),
+            ("script", "css/main.js"),
+            ("page", "css/main.html"),
+            ("image", "css/main.html"),
+            ("asset", "css/main.html"),
+            (None, "css/main.html"),
+        ],
+    )
+    def test_extension_follows_the_reference(self, kind, expected):
+        """Only the MIME-critical kinds change the name."""
+        path = self.downloader._get_local_path("http://example.com/css/main", kind)
+        assert path == self.downloader._resolve_output_path(expected)
+
+    def test_a_real_extension_is_never_overridden(self):
+        """A URL that already names its type keeps that name."""
+        path = self.downloader._get_local_path(
+            "http://example.com/a/style.css", "script"
+        )
+        assert path == self.downloader._resolve_output_path("a/style.css")
+
+    def test_the_first_reference_decides_and_later_lookups_agree(self):
+        """The download loop resolves the same URL with no kind at all.
+
+        If it got a different answer the link would name a file that was
+        never written, which is the whole class of bug this guards.
+        """
+        url = "http://example.com/css/main"
+        first = self.downloader._get_local_path(url, "stylesheet")
+        assert self.downloader._get_local_path(url) == first
+        assert self.downloader._get_local_path(url, "page") == first
+        assert first.name == "main.css"
+
+
+class TestExtensionlessAssetsEndToEnd:
+    """The archived page must reference files that exist, with usable types."""
+
+    def teardown_method(self):
+        """Clean up after tests."""
+        os.environ.pop("WAYBACK_URL", None)
+
+    def test_stylesheet_and_script_land_on_their_own_extensions(self, tmp_path):
+        """A whole archive of extensionless assets resolves and is typed."""
+        page = (
+            b"<html><head>"
+            b'<link rel="stylesheet" href="http://example.com/css/main">'
+            b"</head><body>"
+            b'<img src="http://example.com/image/12345">'
+            b'<script src="http://example.com/js/bundle"></script>'
+            b"</body></html>"
+        )
+
+        def fake_download_file(url):
+            """Serve each asset without touching the network."""
+            if url == "http://example.com/":
+                return page
+            if "css" in url:
+                return b"body{color:red}"
+            if "js" in url:
+                return b"var x=1;"
+            return b"\x89PNG\r\n\x1a\n"
+
+        output_dir = tmp_path / "output"
+        downloader = _make_downloader(output_dir)
+        downloader.download_file = fake_download_file
+        with contextlib.redirect_stdout(io.StringIO()):
+            downloader.download()
+
+        written = {str(p.relative_to(output_dir)) for p in output_dir.rglob("*") if p.is_file()}
+        assert "css/main.css" in written
+        assert "js/bundle.js" in written
+
+        # The name alone proves nothing: an extensionless URL sniffs as a page,
+        # so without the kind the stylesheet is run through the HTML processor
+        # and written into main.css wrapped in <body>.
+        stylesheet = (output_dir / "css" / "main.css").read_text("utf-8")
+        assert "body{color:red}" in stylesheet
+        assert "<body" not in stylesheet and "<html" not in stylesheet
+
+        script = (output_dir / "js" / "bundle.js").read_text("utf-8")
+        assert "var x=1;" in script
+        assert "<body" not in script and "<html" not in script
+
+        index = (output_dir / "index.html").read_text("utf-8")
+        references = re.findall(r'(?:href|src)=["\']?([^"\'>\s]+)', index)
+        assert references, "the page lost its references"
+        for reference in references:
+            assert not reference.startswith("http"), f"{reference} still points at the live site"
+            assert (output_dir / unquote(reference)).exists(), f"{reference} names no file"
+
+
+class TestStylesheetImportsAreFollowed:
+    """An extensionless stylesheet must still be treated as CSS."""
+
+    def teardown_method(self):
+        """Clean up after tests."""
+        os.environ.pop("WAYBACK_URL", None)
+
+    def test_import_is_downloaded_and_rewritten(self, tmp_path):
+        """@import inside an extensionless stylesheet resolves locally."""
+        pages = {
+            "http://example.com/": b"<html><head>"
+            b'<link rel="stylesheet" href="http://example.com/css/main">'
+            b"</head><body>x</body></html>",
+            "http://example.com/css/main": (
+                b'@import url("http://example.com/css/theme");\nbody{color:red}'
+            ),
+            "http://example.com/css/theme": b".theme{color:blue}",
+        }
+
+        output_dir = tmp_path / "output"
+        downloader = _make_downloader(output_dir)
+        downloader.download_file = lambda url: pages.get(url, b"DATA")
+        with contextlib.redirect_stdout(io.StringIO()):
+            downloader.download()
+
+        stylesheet = (output_dir / "css" / "main.css").read_text("utf-8")
+
+        # The import target is a stylesheet too, so it earns .css as well.
+        assert (output_dir / "css" / "theme.css").exists()
+        assert "theme.css" in stylesheet
+        assert "http://example.com" not in stylesheet
+        assert ".theme{color:blue}" in (
+            output_dir / "css" / "theme.css"
+        ).read_text("utf-8")
+
+
+class TestReferenceKindSurvivesConfigAndCdnPaths:
+    """The kind has to be recorded wherever the resource is discovered.
+
+    Recording it only where links are rewritten leaves two holes: the whole
+    rewrite is skipped when MAKE_INTERNAL_LINKS_RELATIVE is off, and the CDN
+    branches build their path before the naming rule is applied.
+    """
+
+    def teardown_method(self):
+        """Clean up after tests."""
+        os.environ.pop("WAYBACK_URL", None)
+        os.environ.pop("MAKE_INTERNAL_LINKS_RELATIVE", None)
+
+    def _archive(self, tmp_path, href, relative="true"):
+        """Archive a page carrying one extensionless stylesheet."""
+        page = (
+            f'<html><head><link rel="stylesheet" href="{href}">'
+            "</head><body>x</body></html>"
+        ).encode()
+        os.environ["MAKE_INTERNAL_LINKS_RELATIVE"] = relative
+        output_dir = tmp_path / "output"
+        downloader = _make_downloader(output_dir)
+        downloader.download_file = lambda url: (
+            page if url == "http://example.com/" else b"body{color:red}"
+        )
+        with contextlib.redirect_stdout(io.StringIO()):
+            downloader.download()
+        return output_dir
+
+    def test_absolute_links_still_name_the_stylesheet_correctly(self, tmp_path):
+        """With link rewriting off the stylesheet is still CSS."""
+        output_dir = self._archive(
+            tmp_path, "http://example.com/css/main", relative="false"
+        )
+
+        stylesheet = output_dir / "css" / "main.css"
+        assert stylesheet.exists(), sorted(
+            str(p.relative_to(output_dir)) for p in output_dir.rglob("*") if p.is_file()
+        )
+        assert stylesheet.read_text("utf-8") == "body{color:red}"
+
+    def test_cdn_stylesheet_gets_its_extension(self, tmp_path):
+        """The CDN branch builds its own path and must still be named."""
+        output_dir = self._archive(
+            tmp_path, "https://static1.squarespace.com/static/css/main"
+        )
+
+        stylesheet = (
+            output_dir / "static1.squarespace.com" / "static" / "css" / "main.css"
+        )
+        assert stylesheet.exists(), sorted(
+            str(p.relative_to(output_dir)) for p in output_dir.rglob("*") if p.is_file()
+        )
+        assert stylesheet.read_text("utf-8") == "body{color:red}"
+
+    def test_imported_stylesheet_survives_absolute_links(self, tmp_path):
+        """An @import target is a stylesheet whether or not links are rewritten.
+
+        The rewrite branch is skipped entirely with the flag off, so nothing
+        there records the kind and the import was downloaded as a page.
+        """
+        pages = {
+            "http://example.com/": b"<html><head>"
+            b'<link rel="stylesheet" href="http://example.com/a.css">'
+            b"</head><body>x</body></html>",
+            "http://example.com/a.css": (
+                b'@import url("http://example.com/css/theme");\nbody{color:red}'
+            ),
+            "http://example.com/css/theme": b".theme{color:blue}",
+        }
+
+        os.environ["MAKE_INTERNAL_LINKS_RELATIVE"] = "false"
+        output_dir = tmp_path / "output"
+        downloader = _make_downloader(output_dir)
+        downloader.download_file = lambda url: pages.get(url, b"DATA")
+        with contextlib.redirect_stdout(io.StringIO()):
+            downloader.download()
+
+        imported = output_dir / "css" / "theme.css"
+        assert imported.exists(), sorted(
+            str(p.relative_to(output_dir)) for p in output_dir.rglob("*") if p.is_file()
+        )
+        assert imported.read_text("utf-8") == ".theme{color:blue}"
+
+    def test_cdn_assets_that_already_have_a_name_are_untouched(self, tmp_path):
+        """Only an extensionless CDN path gets an extension added."""
+        downloader = _make_downloader("/tmp/wayback-archive-fidelity")
+        path = downloader._get_local_path(
+            "https://static1.squarespace.com/static/file.js", "script"
+        )
+        assert path == downloader._resolve_output_path(
+            "static1.squarespace.com/static/file.js"
+        )
+
+
+class TestLinkModeDoesNotChangeWhatAFileIs:
+    """MAKE_INTERNAL_LINKS_RELATIVE decides how links read, nothing more.
+
+    Every gap in this area was the same shape: the kind was recorded inside
+    the rewrite branch, so turning the flag off changed the *file* and not
+    just the reference to it.
+    """
+
+    PAGES = {
+        "http://example.com/": b"<html><head>"
+        b'<link rel="stylesheet" href="http://example.com/css/main">'
+        b'<link rel="icon" href="http://example.com/favicon">'
+        b"</head><body>"
+        b'<script src="http://example.com/js/bundle"></script>'
+        b'<img src="http://example.com/image/12345">'
+        b"</body></html>",
+        "http://example.com/css/main": b'@import url("http://example.com/css/theme");'
+        b"\nbody{color:red}",
+        "http://example.com/css/theme": b".theme{color:blue}",
+        "http://example.com/js/bundle": b"var x=1;",
+    }
+
+    def teardown_method(self):
+        """Clean up after tests."""
+        os.environ.pop("WAYBACK_URL", None)
+        os.environ.pop("MAKE_INTERNAL_LINKS_RELATIVE", None)
+
+    def _archive(self, tmp_path, relative):
+        """Archive the fixture with links relative or absolute."""
+        os.environ["MAKE_INTERNAL_LINKS_RELATIVE"] = relative
+        output_dir = tmp_path / relative
+        downloader = _make_downloader(output_dir)
+        downloader.download_file = lambda url: self.PAGES.get(url, b"BYTES")
+        with contextlib.redirect_stdout(io.StringIO()):
+            downloader.download()
+        return output_dir
+
+    def test_the_same_files_are_written_either_way(self, tmp_path):
+        """The set of files must not depend on how links are written."""
+        relative = self._archive(tmp_path, "true")
+        absolute = self._archive(tmp_path, "false")
+
+        assert {str(p.relative_to(relative)) for p in relative.rglob("*") if p.is_file()} == {
+            str(p.relative_to(absolute)) for p in absolute.rglob("*") if p.is_file()
+        }
+
+    @pytest.mark.parametrize("relative", ["true", "false"])
+    @pytest.mark.parametrize(
+        "name,expected",
+        [
+            ("css/main.css", "body{color:red}"),
+            ("css/theme.css", ".theme{color:blue}"),
+            ("js/bundle.js", "var x=1;"),
+        ],
+    )
+    def test_assets_keep_their_type_either_way(self, tmp_path, relative, name, expected):
+        """A stylesheet stays CSS whether or not its link was rewritten."""
+        output_dir = self._archive(tmp_path, relative)
+
+        written = output_dir / name
+        assert written.exists(), sorted(
+            str(p.relative_to(output_dir)) for p in output_dir.rglob("*") if p.is_file()
+        )
+        text = written.read_text("utf-8")
+        assert expected in text
+        assert "<body" not in text and "<html" not in text

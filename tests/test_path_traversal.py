@@ -174,7 +174,7 @@ class TestGetLocalPathContainment:
         self.downloader._current_page_url = "http://example.com/"
         local_path = self.downloader._get_local_path(url)
 
-        assert self.downloader._get_relative_link_path(url, is_page=False) == link
+        assert self.downloader._get_relative_link_path(url, "asset") == link
         # The link is relative to the root page, so resolving it against the
         # output root must land on the exact file the downloader writes.
         assert os.path.realpath(
