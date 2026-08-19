@@ -1085,6 +1085,18 @@ class WaybackDownloader:
             is_google_font = "fonts.gstatic.com" in normalized or "fonts.googleapis.com" in normalized
             is_squarespace_cdn = self._is_squarespace_cdn(normalized)
             if self._is_internal_url(normalized) or is_google_font or is_squarespace_cdn:
+                # @import names a stylesheet; a bare url() names an asset, and
+                # the two want different extensions when the URL carries none.
+                preceding = match.string[:match.start()].rstrip()
+                reference_kind = "stylesheet" if preceding.endswith("@import") else "asset"
+                if reference_kind == "stylesheet":
+                    # Note it before the branch below, which does not run at
+                    # all with relative links off - the imported stylesheet
+                    # would then be downloaded as a page and rewritten as HTML.
+                    # Only a stylesheet is worth pinning: recording "asset"
+                    # would freeze the name for any later reference.
+                    self._note_reference_kind(normalized, reference_kind)
+
                 if self.config.make_internal_links_relative:
                     # For Google Fonts, construct relative path from the normalized URL
                     if is_google_font:
@@ -1108,14 +1120,7 @@ class WaybackDownloader:
                             relative_path = "/" + relative_path
                         new_path = relative_path
                     else:
-                        # @import names a stylesheet; a bare url() names an
-                        # asset, and the two want different extensions when
-                        # the URL carries none.
-                        preceding = match.string[:match.start()].rstrip()
-                        new_path = self._make_relative_path(
-                            normalized,
-                            "stylesheet" if preceding.endswith("@import") else "asset",
-                        )
+                        new_path = self._make_relative_path(normalized, reference_kind)
                     return f"url({new_path})"
                 return f"url({normalized})"
             

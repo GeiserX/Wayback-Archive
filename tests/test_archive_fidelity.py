@@ -583,6 +583,35 @@ class TestReferenceKindSurvivesConfigAndCdnPaths:
         )
         assert stylesheet.read_text("utf-8") == "body{color:red}"
 
+    def test_imported_stylesheet_survives_absolute_links(self, tmp_path):
+        """An @import target is a stylesheet whether or not links are rewritten.
+
+        The rewrite branch is skipped entirely with the flag off, so nothing
+        there records the kind and the import was downloaded as a page.
+        """
+        pages = {
+            "http://example.com/": b"<html><head>"
+            b'<link rel="stylesheet" href="http://example.com/a.css">'
+            b"</head><body>x</body></html>",
+            "http://example.com/a.css": (
+                b'@import url("http://example.com/css/theme");\nbody{color:red}'
+            ),
+            "http://example.com/css/theme": b".theme{color:blue}",
+        }
+
+        os.environ["MAKE_INTERNAL_LINKS_RELATIVE"] = "false"
+        output_dir = tmp_path / "output"
+        downloader = _make_downloader(output_dir)
+        downloader.download_file = lambda url: pages.get(url, b"DATA")
+        with contextlib.redirect_stdout(io.StringIO()):
+            downloader.download()
+
+        imported = output_dir / "css" / "theme.css"
+        assert imported.exists(), sorted(
+            str(p.relative_to(output_dir)) for p in output_dir.rglob("*") if p.is_file()
+        )
+        assert imported.read_text("utf-8") == ".theme{color:blue}"
+
     def test_cdn_assets_that_already_have_a_name_are_untouched(self, tmp_path):
         """Only an extensionless CDN path gets an extension added."""
         downloader = _make_downloader("/tmp/wayback-archive-fidelity")
