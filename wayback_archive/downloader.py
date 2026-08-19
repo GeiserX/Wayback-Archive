@@ -2206,8 +2206,17 @@ class WaybackDownloader:
                                     if is_google_font:
                                         print(f"         📥 Queued Google Font file for download: {css_url[:80]}...", flush=True)
                         
-                        # Rewrite URLs in CSS to relative paths
-                        css = self._rewrite_css_urls(css, url)
+                        # Rewrite URLs in CSS to relative paths. A stylesheet's
+                        # url() references resolve against the stylesheet's own
+                        # location, so make that the current page for the
+                        # rewrite - otherwise every link is computed from
+                        # whichever HTML page happened to be processed last.
+                        previous_page_url = getattr(self, "_current_page_url", None)
+                        self._current_page_url = url
+                        try:
+                            css = self._rewrite_css_urls(css, url)
+                        finally:
+                            self._current_page_url = previous_page_url
                         
                         # Check font URLs in CSS and detect corrupted ones proactively
                         # This ensures we catch corrupted fonts even if they haven't been downloaded yet

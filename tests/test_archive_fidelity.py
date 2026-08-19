@@ -8,12 +8,15 @@ path or the *whole* rewritten document:
 * inline ``style="...url(...)"`` was only rewritten for Wayback-form URLs, so a
   plain one stayed pointed at the live site;
 * rewritten links were not percent-encoded, so a file named ``a#b.png`` was
-  linked as a fragment.
+  linked as a fragment;
+* a stylesheet's ``url()`` links were made relative to the last HTML page
+  processed instead of to the stylesheet itself.
 """
 
 import io
 import contextlib
 import os
+import re
 from urllib.parse import unquote
 
 import pytest
@@ -242,3 +245,40 @@ class TestLinksArePercentEncoded:
             "http://example.com/page?q=1#sec", is_page=True
         )
         assert link.endswith("?q=1#sec")
+
+
+class TestStylesheetLinksAreRelativeToTheStylesheet:
+    """A stylesheet's url() resolves against the stylesheet, not the last page."""
+
+    def teardown_method(self):
+        """Clean up after tests."""
+        os.environ.pop("WAYBACK_URL", None)
+
+    def test_css_url_points_at_the_real_asset(self, tmp_path):
+        """The link must resolve from the .css file's own directory."""
+        pages = {
+            "http://example.com/": b"<html><head>"
+            b'<link rel="stylesheet" href="http://example.com/assets/site.css">'
+            b'</head><body><a href="http://example.com/blog/2024/hello/">p</a>'
+            b"</body></html>",
+            # A page nested several levels deep, archived before the stylesheet,
+            # is what used to supply the wrong "from" directory.
+            "http://example.com/blog/2024/hello/": b"<html><body>post</body></html>",
+            "http://example.com/assets/site.css": (
+                b"body{background:url(http://example.com/i/tile.png)}"
+            ),
+        }
+
+        output_dir = tmp_path / "output"
+        downloader = _make_downloader(output_dir)
+        downloader.download_file = lambda url: pages.get(url, b"ASSET")
+        with contextlib.redirect_stdout(io.StringIO()):
+            downloader.download()
+
+        css_file = output_dir / "assets" / "site.css"
+        match = re.search(r"url\(([^)]+)\)", css_file.read_text("utf-8"))
+        assert match, "stylesheet lost its url() reference"
+
+        target = (css_file.parent / unquote(match.group(1))).resolve()
+        assert target == (output_dir / "i" / "tile.png").resolve()
+        assert target.exists()
