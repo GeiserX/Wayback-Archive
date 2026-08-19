@@ -621,3 +621,71 @@ class TestReferenceKindSurvivesConfigAndCdnPaths:
         assert path == downloader._resolve_output_path(
             "static1.squarespace.com/static/file.js"
         )
+
+
+class TestLinkModeDoesNotChangeWhatAFileIs:
+    """MAKE_INTERNAL_LINKS_RELATIVE decides how links read, nothing more.
+
+    Every gap in this area was the same shape: the kind was recorded inside
+    the rewrite branch, so turning the flag off changed the *file* and not
+    just the reference to it.
+    """
+
+    PAGES = {
+        "http://example.com/": b"<html><head>"
+        b'<link rel="stylesheet" href="http://example.com/css/main">'
+        b'<link rel="icon" href="http://example.com/favicon">'
+        b"</head><body>"
+        b'<script src="http://example.com/js/bundle"></script>'
+        b'<img src="http://example.com/image/12345">'
+        b"</body></html>",
+        "http://example.com/css/main": b'@import url("http://example.com/css/theme");'
+        b"\nbody{color:red}",
+        "http://example.com/css/theme": b".theme{color:blue}",
+        "http://example.com/js/bundle": b"var x=1;",
+    }
+
+    def teardown_method(self):
+        """Clean up after tests."""
+        os.environ.pop("WAYBACK_URL", None)
+        os.environ.pop("MAKE_INTERNAL_LINKS_RELATIVE", None)
+
+    def _archive(self, tmp_path, relative):
+        """Archive the fixture with links relative or absolute."""
+        os.environ["MAKE_INTERNAL_LINKS_RELATIVE"] = relative
+        output_dir = tmp_path / relative
+        downloader = _make_downloader(output_dir)
+        downloader.download_file = lambda url: self.PAGES.get(url, b"BYTES")
+        with contextlib.redirect_stdout(io.StringIO()):
+            downloader.download()
+        return output_dir
+
+    def test_the_same_files_are_written_either_way(self, tmp_path):
+        """The set of files must not depend on how links are written."""
+        relative = self._archive(tmp_path, "true")
+        absolute = self._archive(tmp_path, "false")
+
+        assert {str(p.relative_to(relative)) for p in relative.rglob("*") if p.is_file()} == {
+            str(p.relative_to(absolute)) for p in absolute.rglob("*") if p.is_file()
+        }
+
+    @pytest.mark.parametrize("relative", ["true", "false"])
+    @pytest.mark.parametrize(
+        "name,expected",
+        [
+            ("css/main.css", "body{color:red}"),
+            ("css/theme.css", ".theme{color:blue}"),
+            ("js/bundle.js", "var x=1;"),
+        ],
+    )
+    def test_assets_keep_their_type_either_way(self, tmp_path, relative, name, expected):
+        """A stylesheet stays CSS whether or not its link was rewritten."""
+        output_dir = self._archive(tmp_path, relative)
+
+        written = output_dir / name
+        assert written.exists(), sorted(
+            str(p.relative_to(output_dir)) for p in output_dir.rglob("*") if p.is_file()
+        )
+        text = written.read_text("utf-8")
+        assert expected in text
+        assert "<body" not in text and "<html" not in text
