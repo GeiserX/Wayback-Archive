@@ -212,6 +212,21 @@ class WaybackDownloader:
         """
         return self._convert_to_wayback_url_with_timestamp(url)
     
+    def _referenced_kind(self, url: str) -> Optional[str]:
+        """
+        What a URL was referenced as, if anything recorded it.
+
+        Args:
+            url: The URL about to be fetched.
+
+        Returns:
+            "stylesheet", "script", ... or None when nothing referenced it.
+        """
+        try:
+            return self._kind_by_path.get(str(self._get_local_path(url)))
+        except UnsafeOutputPathError:
+            return None
+
     def _convert_to_wayback_url_with_timestamp(self, url: str, timestamp: str = None, use_iframe: bool = False) -> str:
         """Convert a regular URL to a Wayback Machine URL with optional timestamp.
         
@@ -234,6 +249,16 @@ class WaybackDownloader:
         parsed = urlparse(url)
         path = parsed.path.lower()
         asset_prefix = ""
+
+        # A URL with no extension gives the guesses below nothing to work
+        # with, so Wayback serves its wrapped replay page instead of the raw
+        # file. The element that referenced it knows better.
+        if "." not in os.path.basename(path):
+            prefix_for_kind = {"stylesheet": "cs_", "script": "js_", "image": "im_"}
+            asset_prefix = prefix_for_kind.get(self._referenced_kind(url) or "", "")
+            if asset_prefix:
+                return f"https://web.archive.org/web/{timestamp}{asset_prefix}/{url}"
+
         if any(ext in path for ext in [".jpg", ".jpeg", ".png", ".gif", ".svg", ".webp", ".ico", ".bmp"]):
             asset_prefix = "im_"
         elif any(ext in path for ext in [".woff", ".woff2", ".ttf", ".eot", ".otf"]):
@@ -667,7 +692,13 @@ class WaybackDownloader:
         # Determine if this is an HTML page (we should NOT fallback to live for HTML)
         parsed = urlparse(url)
         path_lower = parsed.path.lower()
-        is_html_page = self._is_html_url(url, parsed)
+        # A referenced stylesheet or script is never a page, whatever the URL
+        # looks like; asking for the iframe view of one returns the Wayback
+        # wrapper rather than the file.
+        is_html_page = self._referenced_kind(url) not in (
+            "stylesheet",
+            "script",
+        ) and self._is_html_url(url, parsed)
         
         # For HTML pages, try the 'if_' version first to get unwrapped content
         # This avoids the Wayback Machine interface wrapper
@@ -1137,6 +1168,44 @@ class WaybackDownloader:
             
             return full_match
         
+        def replace_bare_import(match):
+            """Rewrite @import "path" - the form with no url() wrapper."""
+            url_part = match.group(1).strip()
+            if url_part.startswith(("data:", "javascript:", "#")):
+                return match.group(0)
+
+            original = self._extract_original_url_from_path(url_part)
+            if original:
+                url_part = original
+
+            if url_part.startswith("/") and not url_part.startswith("//"):
+                parsed_base = urlparse(base_url)
+                url_part = f"{parsed_base.scheme}://{parsed_base.netloc}{url_part}"
+
+            normalized = self._normalize_url(url_part, base_url)
+            if not (self._is_internal_url(normalized) or self._is_squarespace_cdn(normalized)):
+                return match.group(0)
+
+            # Note it before the branch below, which does not run with
+            # relative links off - the import would then be downloaded as a
+            # page and rewritten as HTML.
+            self._note_reference_kind(normalized, "stylesheet")
+
+            if not self.config.make_internal_links_relative:
+                return f'@import "{normalized}"'
+            return f'@import "{self._make_relative_path(normalized, "stylesheet")}"'
+
+        # @import may name its stylesheet directly, with no url() around it.
+        # _extract_css_urls already follows that form, so the file was being
+        # downloaded and then left unreferenced while the archived stylesheet
+        # kept pointing at the live site.
+        css = re.sub(
+            r'@import\s+["\']([^"\']+)["\']',
+            replace_bare_import,
+            css,
+            flags=re.IGNORECASE,
+        )
+
         # Pattern to match url() with wayback URLs and absolute paths
         url_patterns = [
             r'url\s*\(\s*["\']?(https?://web\.archive\.org/web/\d+[a-z]*(?:im_|cs_|js_|jm_)/https?://[^"\'()]+)["\']?\s*\)',  # Absolute wayback (check first)
