@@ -689,3 +689,219 @@ class TestLinkModeDoesNotChangeWhatAFileIs:
         text = written.read_text("utf-8")
         assert expected in text
         assert "<body" not in text and "<html" not in text
+
+
+class TestBareImportIsLocalised:
+    """@import may name its stylesheet directly, with no url() wrapper."""
+
+    def teardown_method(self):
+        """Clean up after tests."""
+        os.environ.pop("WAYBACK_URL", None)
+
+    def test_both_import_forms_are_rewritten(self, tmp_path):
+        """The quoted form was downloaded and then left pointing at the site."""
+        pages = {
+            "http://example.com/": b"<html><head>"
+            b'<link rel="stylesheet" href="http://example.com/a.css">'
+            b"</head><body>x</body></html>",
+            "http://example.com/a.css": (
+                b'@import "http://example.com/bare.css";\n'
+                b'@import url("http://example.com/wrapped.css");\n'
+                b"body{color:red}"
+            ),
+            "http://example.com/bare.css": b".bare{}",
+            "http://example.com/wrapped.css": b".wrapped{}",
+        }
+
+        output_dir = tmp_path / "output"
+        downloader = _make_downloader(output_dir)
+        downloader.download_file = lambda url: pages.get(url, b"DATA")
+        with contextlib.redirect_stdout(io.StringIO()):
+            downloader.download()
+
+        stylesheet = (output_dir / "a.css").read_text("utf-8")
+        assert "http://example.com" not in stylesheet, stylesheet
+        assert '@import "bare.css"' in stylesheet
+        assert "url(wrapped.css)" in stylesheet
+        assert (output_dir / "bare.css").exists()
+
+    @pytest.mark.parametrize("relative", ["true", "false"])
+    def test_an_extensionless_bare_import_is_still_css(self, tmp_path, relative):
+        """The rewrite branch is skipped with the flag off, so note it first."""
+        pages = {
+            "http://example.com/": b"<html><head>"
+            b'<link rel="stylesheet" href="http://example.com/a.css">'
+            b"</head><body>x</body></html>",
+            "http://example.com/a.css": b'@import "http://example.com/css/theme";'
+            b"\nbody{color:red}",
+            "http://example.com/css/theme": b".theme{color:blue}",
+        }
+
+        os.environ["MAKE_INTERNAL_LINKS_RELATIVE"] = relative
+        output_dir = tmp_path / relative
+        downloader = _make_downloader(output_dir)
+        downloader.download_file = lambda url: pages.get(url, b"DATA")
+        with contextlib.redirect_stdout(io.StringIO()):
+            downloader.download()
+        os.environ.pop("MAKE_INTERNAL_LINKS_RELATIVE", None)
+
+        imported = output_dir / "css" / "theme.css"
+        assert imported.exists(), sorted(
+            str(p.relative_to(output_dir)) for p in output_dir.rglob("*") if p.is_file()
+        )
+        assert imported.read_text("utf-8") == ".theme{color:blue}"
+
+    def test_an_external_import_is_left_alone(self, tmp_path):
+        """Only same-site imports become local paths."""
+        downloader = _make_downloader(tmp_path / "output")
+        downloader._current_page_url = "http://example.com/a.css"
+        rewritten = downloader._rewrite_css_urls(
+            '@import "https://other.example/x.css";', "http://example.com/a.css"
+        )
+        assert rewritten == '@import "https://other.example/x.css";'
+
+
+class TestReplayPrefixFollowsTheReference:
+    """Wayback serves a wrapped page unless the replay prefix says otherwise."""
+
+    def setup_method(self):
+        """Set up test fixtures."""
+        self.downloader = _make_downloader("/tmp/wayback-archive-fidelity")
+
+    def teardown_method(self):
+        """Clean up after tests."""
+        os.environ.pop("WAYBACK_URL", None)
+
+    def test_extension_still_decides_when_the_url_has_one(self):
+        """The existing guesses are untouched."""
+        for url, prefix in [
+            ("http://example.com/style.css", "cs_"),
+            ("http://example.com/app.js", "js_"),
+            ("http://example.com/pic.png", "im_"),
+        ]:
+            assert prefix in self.downloader._convert_to_wayback_url(url)
+
+    def test_an_extensionless_resource_uses_its_reference(self):
+        """Without this the fetch returns the replay page, not the file."""
+        html = (
+            '<html><head><link rel="stylesheet" href="http://example.com/css/main">'
+            "</head><body>"
+            '<script src="http://example.com/js/bundle"></script>'
+            '<img src="http://example.com/image/12345">'
+            "</body></html>"
+        )
+
+        # Nothing has referenced these yet, so there is nothing to go on.
+        assert "cs_" not in self.downloader._convert_to_wayback_url(
+            "http://example.com/css/main"
+        )
+
+        self.downloader._process_html(html, "http://example.com/")
+
+        for url, prefix in [
+            ("http://example.com/css/main", "cs_"),
+            ("http://example.com/js/bundle", "js_"),
+            ("http://example.com/image/12345", "im_"),
+        ]:
+            assert prefix in self.downloader._convert_to_wayback_url(url), url
+
+    def test_a_referenced_stylesheet_is_not_fetched_as_a_page(self):
+        """download_file asks for the iframe view of pages only."""
+        html = (
+            '<html><head><link rel="stylesheet" href="http://example.com/css/main">'
+            "</head><body>x</body></html>"
+        )
+        self.downloader._process_html(html, "http://example.com/")
+
+        assert self.downloader._referenced_kind("http://example.com/css/main") == (
+            "stylesheet"
+        )
+        assert self.downloader._is_html_url("http://example.com/css/main")
+
+
+class TestWholeArchiveIsSelfContained:
+    """One archive exercising every path that has been wrong at some point.
+
+    The individual cases are covered above; this catches them interacting -
+    a stylesheet reached through an extensionless URL, importing another
+    extensionless stylesheet, from a page two directories deep.
+    """
+
+    PAGES = {
+        "http://example.com/": b"""<html><head>
+            <link rel="stylesheet" href="http://example.com/css/main">
+            <link rel="stylesheet" href="http://example.com/assets/site.css">
+          </head><body>
+            <a href="http://example.com/blog/">blog</a>
+            <a href="http://example.com/blog/2024/hello/">post</a>
+            <img src="http://example.com/i/hero%20shot.png">
+            <img src="http://example.com/i/a%23hash.png">
+            <img src="http://example.com/i/caf%C3%A9.png">
+            <script src="http://example.com/js/bundle"></script>
+            <div style="background:url(http://example.com/i/in%20line.png)"></div>
+            <style>body{background:url(http://example.com/i/blk.png)}</style>
+          </body></html>""",
+        "http://example.com/blog/": b'<html><body><a href="http://example.com/">home</a>'
+        b'<img src="http://example.com/i/hero%20shot.png"></body></html>',
+        "http://example.com/blog/2024/hello/": b"<html><body>"
+        b'<a href="http://example.com/blog/">up</a></body></html>',
+        "http://example.com/css/main": b'@import "http://example.com/css/bare";\n'
+        b"body{color:red}",
+        "http://example.com/css/bare": b".bare{}",
+        "http://example.com/assets/site.css": b"body{background:"
+        b"url(http://example.com/i/tile.png)}",
+        "http://example.com/js/bundle": b"var x=1;",
+    }
+
+    def teardown_method(self):
+        """Clean up after tests."""
+        os.environ.pop("WAYBACK_URL", None)
+
+    def test_nothing_points_outside_the_archive(self, tmp_path):
+        """Every reference in every written file must resolve locally."""
+        output_dir = tmp_path / "output"
+        downloader = _make_downloader(output_dir)
+        downloader.download_file = lambda url: self.PAGES.get(url, b"BYTES")
+        with contextlib.redirect_stdout(io.StringIO()):
+            downloader.download()
+
+        checked, problems = 0, []
+        for written in sorted(
+            list(output_dir.rglob("*.html")) + list(output_dir.rglob("*.css"))
+        ):
+            text = written.read_text("utf-8", "replace")
+            references = (
+                re.findall(r'(?:href|src)=["\']?([^"\'>\s]+)', text)
+                + re.findall(r"url\(['\"]?([^'\")]+)", text)
+                + re.findall(r'@import\s+["\']([^"\']+)["\']', text)
+            )
+            for reference in references:
+                checked += 1
+                if reference.startswith(("http://", "https://", "#", "data:")):
+                    problems.append(f"{written.name} still points at {reference}")
+                    continue
+                target = (written.parent / unquote(reference)).resolve()
+                if not target.exists():
+                    problems.append(f"{written.name} -> {reference} names no file")
+
+        assert not problems, "\n".join(problems)
+        # Guard the guard: an archive that lost its pages has nothing to check
+        # and would otherwise pass silently.
+        assert checked >= 12, f"only {checked} references found"
+
+    def test_assets_keep_their_own_content_type(self, tmp_path):
+        """A stylesheet reached without an extension is still CSS."""
+        output_dir = tmp_path / "output"
+        downloader = _make_downloader(output_dir)
+        downloader.download_file = lambda url: self.PAGES.get(url, b"BYTES")
+        with contextlib.redirect_stdout(io.StringIO()):
+            downloader.download()
+
+        for name, expected in [
+            ("css/main.css", "body{color:red}"),
+            ("css/bare.css", ".bare{}"),
+            ("js/bundle.js", "var x=1;"),
+        ]:
+            written = (output_dir / name).read_text("utf-8")
+            assert expected in written, name
+            assert "<body" not in written and "<html" not in written, name
