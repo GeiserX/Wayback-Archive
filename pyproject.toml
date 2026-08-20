@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wayback-archive"
+description = "A comprehensive tool for downloading and archiving websites from the Wayback Machine"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [{ name = "GeiserX" }]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Build Tools",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
+dynamic = ["version", "dependencies"]
+
+[project.urls]
+Homepage = "https://github.com/GeiserX/Wayback-Archive"
+
+[project.scripts]
+wayback-archive = "wayback_archive.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "wayback_archive.__version__" }
+dependencies = { file = ["config/requirements.txt"] }
+
+[tool.setuptools.packages.find]
+include = ["wayback_archive*"]

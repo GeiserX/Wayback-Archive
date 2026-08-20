@@ -25,19 +25,29 @@ jobs:
         pip install build twine
 
     - name: Build package
-      working-directory: config
-      run: python setup.py sdist bdist_wheel
+      run: python -m build
+
+    - name: Check distributions
+      run: twine check dist/*
+
+    # Run from outside the checkout and assert where the import came from:
+    # python puts the working directory ahead of site-packages, so importing
+    # from the repo root would pass on a completely empty sdist.
+    - name: Verify the sdist installs
+      run: |
+        python -m venv /tmp/sdist-check
+        /tmp/sdist-check/bin/pip install dist/*.tar.gz
+        cd /tmp && /tmp/sdist-check/bin/python -c "import os, wayback_archive, wayback_archive.downloader; p = os.path.dirname(wayback_archive.__file__); assert 'site-packages' in p, p; print('sdist ok', wayback_archive.__version__, p)"
 
     - name: Upload built distributions
       uses: actions/upload-artifact@v7
       with:
         name: wayback-archive-dist
-        path: config/dist/*
+        path: dist/*
         if-no-files-found: error
 
     - name: Publish to PyPI
       if: ${{ env.PYPI_TOKEN != '' }}
-      working-directory: config
       env:
         TWINE_USERNAME: __token__
         TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
