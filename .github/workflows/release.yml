@@ -25,19 +25,26 @@ jobs:
         pip install build twine
 
     - name: Build package
-      working-directory: config
-      run: python setup.py sdist bdist_wheel
+      run: python -m build
+
+    - name: Check distributions
+      run: twine check dist/*
+
+    - name: Verify the sdist installs
+      run: |
+        python -m venv /tmp/sdist-check
+        /tmp/sdist-check/bin/pip install dist/*.tar.gz
+        /tmp/sdist-check/bin/python -c "import wayback_archive; print(wayback_archive.__version__)"
 
     - name: Upload built distributions
       uses: actions/upload-artifact@v7
       with:
         name: wayback-archive-dist
-        path: config/dist/*
+        path: dist/*
         if-no-files-found: error
 
     - name: Publish to PyPI
       if: ${{ env.PYPI_TOKEN != '' }}
-      working-directory: config
       env:
         TWINE_USERNAME: __token__
         TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}

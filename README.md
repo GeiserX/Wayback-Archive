@@ -237,7 +237,7 @@ Wayback-Archive/
   config/
     requirements.txt        # Runtime dependencies
     requirements-dev.txt    # Development dependencies
-    setup.py                # Package setup
+    requirements.txt        # Runtime dependencies
     pytest.ini              # Test configuration
   tests/                    # Test suite
   docs/                     # Documentation
