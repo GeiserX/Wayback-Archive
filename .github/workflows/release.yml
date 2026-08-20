@@ -30,11 +30,14 @@ jobs:
     - name: Check distributions
       run: twine check dist/*
 
+    # Run from outside the checkout and assert where the import came from:
+    # python puts the working directory ahead of site-packages, so importing
+    # from the repo root would pass on a completely empty sdist.
     - name: Verify the sdist installs
       run: |
         python -m venv /tmp/sdist-check
         /tmp/sdist-check/bin/pip install dist/*.tar.gz
-        /tmp/sdist-check/bin/python -c "import wayback_archive; print(wayback_archive.__version__)"
+        cd /tmp && /tmp/sdist-check/bin/python -c "import os, wayback_archive, wayback_archive.downloader; p = os.path.dirname(wayback_archive.__file__); assert 'site-packages' in p, p; print('sdist ok', wayback_archive.__version__, p)"
 
     - name: Upload built distributions
       uses: actions/upload-artifact@v7

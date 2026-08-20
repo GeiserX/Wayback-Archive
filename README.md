@@ -237,10 +237,10 @@ Wayback-Archive/
   config/
     requirements.txt        # Runtime dependencies
     requirements-dev.txt    # Development dependencies
-    requirements.txt        # Runtime dependencies
     pytest.ini              # Test configuration
   tests/                    # Test suite
   docs/                     # Documentation
+  pyproject.toml            # Package metadata and build configuration
   LICENSE                   # GPL-3.0
   README.md
 ```
