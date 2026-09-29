@@ -53,7 +53,7 @@ Needs Python 3.9 or newer. The source install and every setting are in [Getting 
 
 ## Related projects
 
-[Wayback-Diff](https://github.com/GeiserX/Wayback-Diff), [Website-Diff](https://github.com/GeiserX/Website-Diff), [Way-CMS](https://github.com/GeiserX/Way-CMS), [web-mirror](https://github.com/GeiserX/web-mirror), [media-download](https://github.com/GeiserX/media-download), [n8n-nodes-way-cms](https://github.com/GeiserX/n8n-nodes-way-cms) (archived). Descriptions are in [Related projects](https://github.com/GeiserX/Wayback-Archive/blob/main/docs/related.md).
+[Wayback-Diff](https://github.com/GeiserX/Wayback-Diff), [Way-CMS](https://github.com/GeiserX/Way-CMS), [web-mirror](https://github.com/GeiserX/web-mirror), [media-download](https://github.com/GeiserX/media-download), [n8n-nodes-way-cms](https://github.com/GeiserX/n8n-nodes-way-cms) (archived). Descriptions are in [Related projects](https://github.com/GeiserX/Wayback-Archive/blob/main/docs/related.md).
 
 ## License
 
