@@ -12,7 +12,7 @@ python3 -m http.server 8080  # Use a different port
 - **Corrupted fonts**: Detected and removed from CSS automatically
 - **Missing fonts**: Some fonts may not exist in the Wayback Machine archive
 
-See [Font Loading Research Notes](FONT_LOADING.md) for details.
+See [Font Loading Research Notes](https://github.com/GeiserX/Wayback-Archive/blob/main/docs/FONT_LOADING.md) for details.
 
 ## Missing Links or Icons
 
