@@ -32,26 +32,29 @@ Wayback-Archive is a Python tool that downloads archived websites from the [Wayb
 ## Quick start
 
 ```bash
-git clone https://github.com/GeiserX/Wayback-Archive.git && cd Wayback-Archive && pip install -r config/requirements.txt
-WAYBACK_URL="https://web.archive.org/web/20250417203037/http://example.com/" python3 -m wayback_archive.cli
+pip install wayback-archive
+WAYBACK_URL="https://web.archive.org/web/20250417203037/http://example.com/" wayback-archive
 cd output && python3 -m http.server 8000   # then open http://localhost:8000
 ```
 
+Needs Python 3.9 or newer. The source install and every setting are in [Getting started](https://github.com/GeiserX/Wayback-Archive/blob/main/docs/getting-started.md).
+
 ## Documentation
 
-- [Installation](https://github.com/GeiserX/Wayback-Archive/blob/main/docs/installation.md): from source or as a package
+- [Getting started](https://github.com/GeiserX/Wayback-Archive/blob/main/docs/getting-started.md): install from PyPI or from source, and the first run
 - [Configuration](https://github.com/GeiserX/Wayback-Archive/blob/main/docs/configuration.md): every environment variable
 - [Usage](https://github.com/GeiserX/Wayback-Archive/blob/main/docs/usage.md): macOS, Linux and Windows examples
 - [Features](https://github.com/GeiserX/Wayback-Archive/blob/main/docs/features.md): the full list and a comparison with wget and httrack
-- [How it works](https://github.com/GeiserX/Wayback-Archive/blob/main/docs/architecture.md): the crawl steps, project layout and dependencies
+- [How it works](https://github.com/GeiserX/Wayback-Archive/blob/main/docs/how-it-works.md): the crawl steps, project layout and dependencies
 - [Troubleshooting](https://github.com/GeiserX/Wayback-Archive/blob/main/docs/troubleshooting.md), including the [font loading notes](https://github.com/GeiserX/Wayback-Archive/blob/main/docs/FONT_LOADING.md)
 - [Development](https://github.com/GeiserX/Wayback-Archive/blob/main/docs/development.md): tests and contributing
+- [Related projects](https://github.com/GeiserX/Wayback-Archive/blob/main/docs/related.md): the other Wayback tools
 - [Releases](https://github.com/GeiserX/Wayback-Archive/releases)
 
 ## Related projects
 
-[Wayback-Diff](https://github.com/GeiserX/Wayback-Diff), [Website-Diff](https://github.com/GeiserX/Website-Diff), [Way-CMS](https://github.com/GeiserX/Way-CMS), [web-mirror](https://github.com/GeiserX/web-mirror), [media-download](https://github.com/GeiserX/media-download), [n8n-nodes-way-cms](https://github.com/GeiserX/n8n-nodes-way-cms). Descriptions are in [Development](https://github.com/GeiserX/Wayback-Archive/blob/main/docs/development.md#related-projects).
+[Wayback-Diff](https://github.com/GeiserX/Wayback-Diff), [Way-CMS](https://github.com/GeiserX/Way-CMS), [web-mirror](https://github.com/GeiserX/web-mirror), [media-download](https://github.com/GeiserX/media-download), [n8n-nodes-way-cms](https://github.com/GeiserX/n8n-nodes-way-cms) (archived). Descriptions are in [Related projects](https://github.com/GeiserX/Wayback-Archive/blob/main/docs/related.md).
 
 ## License
 
-This project is licensed under the [GNU General Public License v3.0](https://github.com/GeiserX/Wayback-Archive/blob/main/LICENSE) (GPL-3.0).
+[GPL-3.0-or-later](https://github.com/GeiserX/Wayback-Archive/blob/main/LICENSE)
