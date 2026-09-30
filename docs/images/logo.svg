@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="800 10 456 282" width="456" height="282" role="img" aria-label="Wayback-Archive">
+  <rect x="810" y="46" width="400" height="236" rx="18" fill="#f97316"/>
+  <rect x="840" y="70" width="340" height="120" rx="10" fill="#fff7ed"/>
+  <rect x="840" y="70" width="340" height="28" rx="10" fill="#1e293b"/>
+  <rect x="840" y="86" width="340" height="12" fill="#1e293b"/>
+  <rect x="900" y="112" width="220" height="62" rx="31" fill="#1e293b"/>
+  <circle cx="934" cy="143" r="22" fill="#fff7ed"/>
+  <circle cx="1086" cy="143" r="22" fill="#fff7ed"/>
+  <circle cx="934" cy="143" r="10" fill="#1e293b"/>
+  <circle cx="1086" cy="143" r="10" fill="#1e293b"/>
+  <rect x="964" y="126" width="92" height="34" rx="4" fill="#78350f"/>
+  <path d="M870,282 L890,220 H1130 L1150,282 Z" fill="#ea580c"/>
+  <circle cx="930" cy="252" r="8" fill="#7c2d12"/>
+  <circle cx="1090" cy="252" r="8" fill="#7c2d12"/>
+  <circle cx="1206" cy="60" r="40" fill="#fde047"/>
+  <path d="M1206,42 L1180,60 L1206,78 Z M1232,42 L1206,60 L1232,78 Z" fill="#1e293b"/>
+</svg>
