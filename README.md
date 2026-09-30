@@ -38,7 +38,7 @@ WAYBACK_URL="https://web.archive.org/web/20250417203037/http://example.com/" way
 cd output && python3 -m http.server 8000   # then open http://localhost:8000
 ```
 
-Needs Python 3.9 or newer. The source install and every setting are in [Getting started](https://github.com/GeiserX/Wayback-Archive/blob/main/docs/getting-started.md).
+Needs Python 3.10 or newer. The source install and every setting are in [Getting started](https://github.com/GeiserX/Wayback-Archive/blob/main/docs/getting-started.md).
 
 ## Documentation
 
