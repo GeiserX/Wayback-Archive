@@ -180,14 +180,17 @@ class TestPatternDetection:
         assert self.dl._is_tracker("https://facebook.net/sdk.js") is True
         assert self.dl._is_tracker("https://stats.example.com/t.js") is True
         assert self.dl._is_tracker("https://tracking.example.com/t.js") is True
-        assert self.dl._is_tracker("https://example.com/analytics.js") is True
+        assert self.dl._is_tracker("https://cdn.other.com/analytics.js") is True
+        # The archived site's own files are never trackers.
+        assert self.dl._is_tracker("https://example.com/analytics.js") is False
         assert self.dl._is_tracker("https://example.com/normal.js") is False
 
     def test_ad_patterns(self):
         assert self.dl._is_ad("https://advertising.com/ad.js") is True
         assert self.dl._is_ad("https://adserver.example.com/ad.js") is True
-        assert self.dl._is_ad("https://example.com/sponsor-banner.jpg") is True
-        assert self.dl._is_ad("https://example.com/popup-ad.html") is True
+        # A word in a file name is not an ad: these are the site's images.
+        assert self.dl._is_ad("https://example.com/sponsor-banner.jpg") is False
+        assert self.dl._is_ad("https://example.com/popup-ad.html") is False
         assert self.dl._is_ad("https://example.com/content.html") is False
 
     def test_contact_patterns(self):
@@ -1231,7 +1234,7 @@ class TestProcessHtml:
 
     def test_removes_inline_tracking_scripts(self):
         self.dl.config.remove_trackers = True
-        html = '<html><body><script>var gtag = function(){}; datalayer.push({});</script><p>Content</p></body></html>'
+        html = "<html><body><script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('config','UA-1');</script><p>Content</p></body></html>"
         processed, _ = self.dl._process_html(html, "http://example.com/")
         assert "gtag" not in processed
 

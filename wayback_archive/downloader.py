@@ -76,36 +76,38 @@ class WaybackDownloader:
     # belong to someone else today, and what it serves now is not the archive.
     LIVE_FALLBACK_HOSTS = GOOGLE_FONT_HOSTS + ("code.jquery.com",) + SQUARESPACE_CDN_HOSTS
 
-    # Common tracker/analytics patterns
-    TRACKER_PATTERNS = [
-        r"google-analytics\.com",
-        r"googletagmanager\.com",
-        r"facebook\.net",
-        r"doubleclick\.net",
-        r"googleads\.g\.doubleclick\.net",
-        r"googlesyndication\.com",
-        r"facebook\.com/tr",
-        r"analytics\.",
-        r"stats\.",
-        r"tracking\.",
-        r"tagmanager\.google\.com",
-        r"gtag\.js",
-        r"ga\.js",
-        r"analytics\.js",
-    ]
+    # Trackers and ads are recognised by host and exact file name only, and
+    # never on the archived site's own host: a word anywhere in the URL
+    # (banner, popup, "ads." in threads.png) deleted the site's own files.
+    # A host matches itself and its subdomains.
+    TRACKER_HOSTS = (
+        "google-analytics.com",
+        "googletagmanager.com",
+        "tagmanager.google.com",
+        "facebook.net",
+        "doubleclick.net",
+        "googlesyndication.com",
+    )
+    # A host whose own name starts with one of these labels
+    # (stats.wp.com, analytics.example.net).
+    TRACKER_HOST_LABELS = ("analytics", "stats", "tracking")
+    TRACKER_FILES = ("gtag.js", "ga.js", "analytics.js", "urchin.js")
+    # Markers of the Google Analytics / Tag Manager snippets in inline code.
+    TRACKER_INLINE_MARKERS = (
+        "gtag('config'",
+        'gtag("config"',
+        "googletagmanager.com/gtm.js",
+        "googleanalyticsobject",
+        "_gaq.push",
+    )
 
-    # Common ad patterns
-    AD_PATTERNS = [
-        r"ads\.",
-        r"advertising\.com",
-        r"doubleclick\.net",
-        r"googlesyndication\.com",
-        r"googleads\.",
-        r"adserver\.",
-        r"banner",
-        r"popup",
-        r"sponsor",
-    ]
+    AD_HOSTS = (
+        "advertising.com",
+        "doubleclick.net",
+        "googlesyndication.com",
+        "googleadservices.com",
+    )
+    AD_HOST_LABELS = ("ads", "adserver", "googleads")
 
     # Contact link patterns
     CONTACT_PATTERNS = [
@@ -290,19 +292,36 @@ class WaybackDownloader:
                     '.json', '.xml', '.txt', '.pdf'}
         return not any(path_lower.endswith(e) for e in non_html)
 
+    def _third_party_parts(self, url: str) -> Optional[Tuple[str, str]]:
+        """(host, path) of a URL on another host, None for the site's own."""
+        url = self._extract_original_url_from_path(url) or url
+        parsed = urlparse("https:" + url if url.startswith("//") else url)
+        host = (parsed.hostname or "").lower()
+        if not host or host.removeprefix("www.") == (self.config.domain or "").lower().removeprefix("www."):
+            return None
+        return host, parsed.path
+
+    def _matches_blocklist(self, url: str, hosts, labels, files=()) -> bool:
+        parts = self._third_party_parts(url)
+        if not parts:
+            return False
+        host, path = parts
+        return (
+            any(host == h or host.endswith("." + h) for h in hosts)
+            or host.split(".")[0] in labels
+            or posixpath.basename(path).lower() in files
+        )
+
     def _is_tracker(self, url: str) -> bool:
         """Check if URL is a tracker/analytics script."""
-        for pattern in self.TRACKER_PATTERNS:
-            if re.search(pattern, url, re.IGNORECASE):
-                return True
-        return False
+        parts = self._third_party_parts(url)
+        if parts and _host_matches("https://" + parts[0], ("facebook.com",)) and parts[1].rstrip("/") == "/tr":
+            return True
+        return self._matches_blocklist(url, self.TRACKER_HOSTS, self.TRACKER_HOST_LABELS, self.TRACKER_FILES)
 
     def _is_ad(self, url: str) -> bool:
         """Check if URL is an ad."""
-        for pattern in self.AD_PATTERNS:
-            if re.search(pattern, url, re.IGNORECASE):
-                return True
-        return False
+        return self._matches_blocklist(url, self.AD_HOSTS, self.AD_HOST_LABELS)
 
     def _is_contact_link(self, url: str) -> bool:
         """Check if URL is a contact link."""
@@ -1636,9 +1655,7 @@ class WaybackDownloader:
                 if script.string:
                     script_text = script.string.lower()
                     # Only remove tracking scripts, not cookie consent functionality
-                    if any(pattern in script_text for pattern in self.TRACKER_PATTERNS + [
-                        "gtag", "datalayer", "google-analytics"
-                    ]):
+                    if any(marker in script_text for marker in self.TRACKER_INLINE_MARKERS):
                         # Skip cookieyes and cookie consent scripts - preserve them
                         if "cookieyes" not in script_text and "cookie consent" not in script_text:
                             script.decompose()
