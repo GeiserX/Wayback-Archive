@@ -2184,10 +2184,26 @@ class WaybackDownloader:
                 if "/web/" in original_xlink:
                     # Extract just the fragment part
                     if "#" in str(xlink_href):
-                        fragment = "#" + str(xlink_href).split("#", 1)[1]
+                        target, fragment = str(xlink_href).split("#", 1)
+                        fragment = "#" + fragment
                         # Remove query params from fragment if present
                         if "?" in fragment:
                             fragment = fragment.split("?")[0]
+                        # <use> can only point into an SVG document. A page
+                        # URL means a symbol on this page; anything else is a
+                        # sprite file, which is kept and downloaded.
+                        normalized_target = self._normalize_url(target, base_url)
+                        if (
+                            target
+                            and not self._is_html_url(normalized_target)
+                            and self._is_internal_url(normalized_target)
+                        ):
+                            if self.config.make_internal_links_relative:
+                                fragment = self._get_relative_link_path(normalized_target, "image") + fragment
+                            else:
+                                fragment = normalized_target + fragment
+                            if normalized_target not in self.config.visited_urls:
+                                links_to_follow.append(normalized_target)
                         use_elem["xlink:href"] = fragment
                         if use_elem.get("href"):
                             use_elem["href"] = fragment

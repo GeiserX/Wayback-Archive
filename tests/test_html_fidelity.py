@@ -292,3 +292,28 @@ class TestBaseHref:
         dl = _make_dl()
         soup, _ = _process(dl, f'<html><head><base href="{W}/https://site.com/"></head><body></body></html>')
         assert soup.base is None
+
+
+class TestSvgUseSprites:
+    """<use> pointing into a sprite file keeps the file; one pointing into
+    the page itself keeps just the fragment."""
+
+    def test_external_sprite_is_kept_and_downloaded(self):
+        dl = _make_dl()
+        soup, links = _process(dl, (
+            f'<html><body><svg><use xlink:href="{W}im_/https://site.com/assets/sprite.svg#icon-search"></use></svg>'
+            '</body></html>'
+        ), page="https://site.com/blog/post")
+        assert soup.find("use")["xlink:href"] == "../assets/sprite.svg#icon-search"
+        assert "https://site.com/assets/sprite.svg" in links
+
+    def test_same_page_symbol_keeps_the_fragment(self):
+        dl = _make_dl()
+        soup, links = _process(dl, (
+            f'<html><body><svg><use xlink:href="{W}im_/https://site.com/#email-icon" href="{W}im_/https://site.com/#email-icon"></use></svg>'
+            '</body></html>'
+        ))
+        use = soup.find("use")
+        assert use["xlink:href"] == "#email-icon"
+        assert use["href"] == "#email-icon"
+        assert links == []
