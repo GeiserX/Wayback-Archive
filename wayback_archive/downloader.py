@@ -820,10 +820,10 @@ class WaybackDownloader:
                         if not is_only_wrapper:
                             # Got content (even if it has Wayback scripts, it has the actual page)
                             return content
-                    except:
+                    except Exception:
                         # If we can't decode, assume it's good
                         return content
-            except:
+            except Exception:
                 # If if_ version fails, fall through to regular download
                 pass
         
@@ -887,7 +887,7 @@ class WaybackDownloader:
                                         print(f"         ⚠️  Font file is corrupted (HTML error page) - will be removed from CSS", flush=True)
                                         continue  # Try next timestamp
                                     return content
-                        except:
+                        except Exception:
                             continue
                 
                 # All Wayback attempts failed - try a well-known CDN live (only for assets, not HTML pages)
