@@ -1507,8 +1507,9 @@ class WaybackDownloader:
             for match in re.finditer(pattern, js):
                 js_url = match.group(1).strip()
                 # Skip if it looks like code, not a URL. A word test ("if")
-                # threw away every .gif; code has spaces or punctuation.
-                if re.search(r"[\s{}();<>]", js_url):
+                # threw away every .gif; code has spaces or braces. URLs may
+                # hold parentheses and semicolons (File_(2).png, a.png;v=2).
+                if re.search(r"[\s{}<>]", js_url):
                     continue
                 if not js_url.startswith(("http://", "https://", "/")):
                     continue

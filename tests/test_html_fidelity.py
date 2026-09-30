@@ -425,6 +425,8 @@ class TestJsUrlExtraction:
         ('fetch("/api/data.json")', ["https://site.com/api/data.json"]),
         ('y.src="https://site.com/img/spinner.gif"', ["https://site.com/img/spinner.gif"]),
         ('y.src="https://site.com/img/life.png"', ["https://site.com/img/life.png"]),
+        ('y.src="https://site.com/img/File_(2).png"', ["https://site.com/img/File_(2).png"]),
+        ('z.src="https://site.com/a.png;v=2"', ["https://site.com/a.png;v=2"]),
         ('y.src="function(){return 1}"', []),
         ('y.href="/a b"', []),
         ('y.src="https://other.com/x.png"', []),
