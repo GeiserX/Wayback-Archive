@@ -450,6 +450,16 @@ class TestWaybackUrlParsing:
         assert re.search(r'href="?about\.html', processed)
         assert re.search(r'href="?b\.html', processed)
 
+    def test_default_port_link_in_https_stylesheet_is_internal(self):
+        # An http://site:80 reference on an https site is the same file; moving
+        # it to https must drop the :80 or it names another host.
+        dl = _make_downloader()
+        urls = dl._extract_css_urls(
+            "a{background:url(http://example.com:80/bg.png)}", "https://example.com/s.css"
+        )
+        assert urls == ["https://example.com/bg.png"]
+        assert dl._is_internal_url(urls[0])
+
     @pytest.mark.parametrize("ts, year, month", [("2015", 2015, 1), ("201506", 2015, 6)])
     def test_short_timestamp_is_padded(self, ts, year, month):
         dl = _make_downloader(wayback_url=f"https://web.archive.org/web/{ts}/https://example.com/")

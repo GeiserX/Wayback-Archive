@@ -423,9 +423,13 @@ class WaybackDownloader:
         url_domain = self._strip_default_port(parsed.netloc.lower(), parsed.scheme).removeprefix("www.")
         base_domain = parsed_base.netloc.lower().removeprefix("www.")
         if url_domain == base_domain or url_domain == "":
-            # Internal URL - use base_url scheme
+            # Internal URL - use base_url scheme. Its default port goes with
+            # the old scheme: http://site:80 is not https://site:80.
             if parsed_base.scheme and parsed.scheme != parsed_base.scheme:
-                parsed = parsed._replace(scheme=parsed_base.scheme)
+                parsed = parsed._replace(
+                    scheme=parsed_base.scheme,
+                    netloc=self._strip_default_port(parsed.netloc, parsed.scheme),
+                )
 
         # Handle www/non-www conversion
         if self.config.make_non_www and parsed.netloc.startswith("www."):
