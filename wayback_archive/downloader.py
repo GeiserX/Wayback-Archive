@@ -176,8 +176,6 @@ class WaybackDownloader:
         if parsed.scheme and parsed.scheme.lower() not in ('http', 'https', ''):
             return False
         
-        if "@" in parsed.netloc:
-            return False
         url_domain = parsed.netloc.lower().removeprefix("www.")
         base_domain = self.config.domain.lower().removeprefix("www.")
 

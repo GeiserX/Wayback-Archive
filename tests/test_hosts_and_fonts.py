@@ -552,3 +552,27 @@ class TestGoogleFontsIsAHostMatch:
         )
         assert not any("if_/https://fonts.googleapis.com" in url for url, _ in session.calls)
 
+
+class TestUserinfoOnATrustedHost:
+    """userinfo in front of a genuine trusted host still does not match.
+
+    Parsing the host already rejects "trusted@elsewhere"; these pin the case
+    where only the "@" check stands in the way.
+    """
+
+    def test_squarespace_host_with_userinfo_is_not_the_cdn(self):
+        assert _make_downloader()._is_squarespace_cdn("http://u:p@static1.squarespace.com/x") is False
+
+    def test_live_fetch_refuses_userinfo(self):
+        dl = _make_downloader()
+        dl.session = _FakeSession({})
+        assert dl._fetch_from_live_cdn("http://u:p@static1.squarespace.com/x.js") is None
+        assert dl._fetch_from_live_cdn("http://u@fonts.gstatic.com/s/x.woff2") is None
+        assert dl.session.calls == []
+
+    def test_wayback_url_with_userinfo_is_wrapped(self):
+        dl = _make_downloader()
+        url = "http://u@web.archive.org/web/2020/http://example.com/"
+        converted = dl._convert_to_wayback_url_with_timestamp(url)
+        assert converted.startswith("https://web.archive.org/web/20200101000000")
+        assert converted.endswith(url)
