@@ -42,7 +42,7 @@ WAYBACK_URL="https://web.archive.org/web/20070405072310/http://www.python.org/" 
 open output/index.html                     # Linux: xdg-open output/index.html
 ```
 
-Needs Python 3.10 or newer (on 3.9, pip installs the old 1.4.1 with no warning); `pip install` works too, and the other install paths are in [Getting started](https://geiserx.github.io/Wayback-Archive/getting-started/). The run ends with a `Download Complete!` block counting the files downloaded, failed and skipped; the copy opens straight from disk, and `MAX_FILES` is there only to keep the first try short. There are no flags: every setting is an environment variable, listed in [Configuration](https://geiserx.github.io/Wayback-Archive/configuration/).
+Needs Python 3.10 or newer (on 3.9, pip stops with `ResolutionImpossible`); `pip install` works too, and the other install paths are in [Getting started](https://geiserx.github.io/Wayback-Archive/getting-started/). The run ends with a `Download Complete!` block counting the files downloaded, failed and skipped; the copy opens straight from disk. `MAX_FILES` keeps the first try short, and since the crawl fetches files in the order it finds them, a short run can stop before a stylesheet the full run saves; drop it to fetch the whole site. There are no flags: every setting is an environment variable, listed in [Configuration](https://geiserx.github.io/Wayback-Archive/configuration/).
 
 ## Documentation
 
