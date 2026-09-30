@@ -2393,9 +2393,16 @@ class WaybackDownloader:
             else:
                 consecutive_refusals = 0
             if not content:
-                # Try CDN fallback for critical jQuery files if Wayback fails
+                # Try CDN fallback for critical jQuery files if Wayback fails:
+                # the version the URL names, or 3.7.1 when it names none
                 if "jquery.min.js" in url.lower() and "cdn" not in url.lower():
-                    content = self._fetch_from_live_cdn("https://code.jquery.com/jquery-3.7.1.min.js")
+                    match = re.search(
+                        r"jquery[-./@]?v?(\d+\.\d+(?:\.\d+)?)|[?&]ver=(\d+\.\d+(?:\.\d+)?)", url, re.I
+                    )
+                    version = (match.group(1) or match.group(2)) if match else "3.7.1"
+                    if not match:
+                        print(f"         jQuery version unknown; substituting {version}", flush=True)
+                    content = self._fetch_from_live_cdn(f"https://code.jquery.com/jquery-{version}.min.js")
                 
                 if not content:
                     files_failed += 1

@@ -531,3 +531,26 @@ class TestStartRedirect:
         dl.download()
         assert dl.config.domain == "example.com"
         assert "redirects to" not in capsys.readouterr().out
+
+
+class TestJqueryReplacement:
+    @pytest.mark.parametrize("src, version", [
+        ("/js/jquery-1.7.2/jquery.min.js", "1.7.2"),
+        ("/wp-includes/js/jquery/jquery.min.js?ver=3.6.0", "3.6.0"),
+        ("/js/jquery.min.js", "3.7.1"),
+    ])
+    def test_the_version_named_in_the_url_is_fetched(self, tmp_path, src, version):
+        start = f'<!DOCTYPE html><html><head><script src="{src}"></script></head><body></body></html>'.encode()
+        dl = _make_downloader(output_dir=tmp_path / "out")
+
+        def handler(url, kwargs):
+            if url.endswith("/http://example.com/"):
+                return _Response(200, start)
+            if url.startswith("https://code.jquery.com/"):
+                return _Response(200, b"/*! jQuery */", url=url)
+            return _Response(404)
+
+        dl.session.get = _Recorder(handler)
+        dl.download()
+        live = [url for url, _ in dl.session.get.calls if "code.jquery.com" in url]
+        assert live == [f"https://code.jquery.com/jquery-{version}.min.js"]

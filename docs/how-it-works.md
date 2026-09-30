@@ -17,7 +17,7 @@ Every file is requested from the Wayback Machine (`web.archive.org`). The tool n
 The one exception is a short list of well-known CDN hosts. When the Wayback Machine does not have a file on one of these, the tool fetches it live, without following redirects:
 
 - Google Fonts: `fonts.googleapis.com`, `fonts.gstatic.com`
-- jQuery: `code.jquery.com` (also the source of the jQuery 3.7.1 replacement when a site's own `jquery.min.js` is missing)
+- jQuery: `code.jquery.com` (also the source of the replacement when a site's own `jquery.min.js` is missing: the version its URL names, or 3.7.1)
 - Squarespace: `static1.squarespace.com`, `static.squarespace.com`, `images.squarespace-cdn.com`, `sqspcdn.com` and its subdomains
 
 A host matches only exactly or as a subdomain (`assets.sqspcdn.com`), never by containing the name (`sqspcdn.com.example.net`, `sqspcdn.com@10.0.0.1`). Anything else the Wayback Machine does not have is reported as failed.
