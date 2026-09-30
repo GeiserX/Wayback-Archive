@@ -1545,6 +1545,7 @@ class TestDownloadMain:
         dl.download_file = Mock(
             return_value=b'@font-face { font-family: "Roboto"; src: url(https://fonts.gstatic.com/s/roboto/v29/file.woff2); }'
         )
+        dl.session.get = Mock(return_value=Mock(status_code=404))  # the corrupted-font probe
         dl.download()
 
     def test_download_content_type_detection_from_content(self, tmp_path):
@@ -1732,107 +1733,110 @@ class TestContentTypeDetection:
         _cleanup_env("WAYBACK_URL")
 
     def _run_download_with_content(self, tmp_path, base_url, content):
-        """Helper to run download with mocked content for a specific base URL."""
+        """Run download with mocked content for one URL; return what was saved
+        as a list of (relative path, bytes)."""
         dl = _make_downloader()
         dl.config.output_dir = str(tmp_path)
         dl.config.max_files = 1
         dl.config.base_url = base_url
         dl.download_file = Mock(return_value=content)
         dl.download()
+        return sorted(
+            (p.relative_to(tmp_path).as_posix(), p.read_bytes())
+            for p in tmp_path.rglob("*") if p.is_file()
+        )
+
+    # An extensionless URL is stored under .html whatever it holds, so for
+    # these the sniffed type shows only in the bytes: a binary that is taken
+    # for a page gets parsed and rewritten as HTML.
+    def _assert_saved_untouched(self, saved, content):
+        assert [data for _, data in saved] == [content]
 
     def test_detects_svg_from_content(self, tmp_path):
-        self._run_download_with_content(tmp_path,
-            "http://example.com/icon",
-            b'<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg"></svg>'
-        )
+        content = b'<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg"></svg>'
+        saved = self._run_download_with_content(tmp_path, "http://example.com/icon", content)
+        self._assert_saved_untouched(saved, content)
 
     def test_detects_png_from_content(self, tmp_path):
-        self._run_download_with_content(tmp_path,
-            "http://example.com/image",
-            b'\x89PNG\r\n\x1a\n' + b'\x00' * 100
-        )
+        content = b'\x89PNG\r\n\x1a\n' + b'\x00' * 100
+        saved = self._run_download_with_content(tmp_path, "http://example.com/image", content)
+        self._assert_saved_untouched(saved, content)
 
     def test_detects_jpeg_from_content(self, tmp_path):
-        self._run_download_with_content(tmp_path,
-            "http://example.com/photo",
-            b'\xff\xd8\xff' + b'\x00' * 100
-        )
+        content = b'\xff\xd8\xff' + b'\x00' * 100
+        saved = self._run_download_with_content(tmp_path, "http://example.com/photo", content)
+        self._assert_saved_untouched(saved, content)
 
     def test_detects_gif_from_content(self, tmp_path):
-        self._run_download_with_content(tmp_path,
-            "http://example.com/anim",
-            b'GIF89a' + b'\x00' * 100
-        )
+        content = b'GIF89a' + b'\x00' * 100
+        saved = self._run_download_with_content(tmp_path, "http://example.com/anim", content)
+        self._assert_saved_untouched(saved, content)
 
     def test_detects_webp_from_content(self, tmp_path):
-        self._run_download_with_content(tmp_path,
-            "http://example.com/img",
-            b'RIFF\x00\x00\x00\x00WEBP' + b'\x00' * 100
-        )
+        content = b'RIFF\x00\x00\x00\x00WEBP' + b'\x00' * 100
+        saved = self._run_download_with_content(tmp_path, "http://example.com/img", content)
+        self._assert_saved_untouched(saved, content)
 
     def test_detects_css_from_url(self, tmp_path):
-        self._run_download_with_content(tmp_path,
-            "http://example.com/styles/main.css",
-            b'body { margin: 0; }'
-        )
+        content = b'body { margin: 0; }'
+        saved = self._run_download_with_content(tmp_path, "http://example.com/styles/main.css", content)
+        assert saved == [("styles/main.css", content)]
 
     def test_detects_json_from_url(self, tmp_path):
-        self._run_download_with_content(tmp_path,
-            "http://example.com/data.json",
-            b'{"key": "value"}'
-        )
+        content = b'{"key": "value"}'
+        saved = self._run_download_with_content(tmp_path, "http://example.com/data.json", content)
+        assert saved == [("data.json", content)]
 
     def test_detects_xml_from_url(self, tmp_path):
-        self._run_download_with_content(tmp_path,
-            "http://example.com/feed.xml",
-            b'<?xml version="1.0"?><rss></rss>'
-        )
+        content = b'<?xml version="1.0"?><rss></rss>'
+        saved = self._run_download_with_content(tmp_path, "http://example.com/feed.xml", content)
+        assert saved == [("feed.xml", content)]
 
     def test_detects_video_from_url(self, tmp_path):
-        self._run_download_with_content(tmp_path,
-            "http://example.com/video.mp4",
-            b'\x00\x00\x00\x20ftyp' + b'\x00' * 100
-        )
+        content = b'\x00\x00\x00\x20ftyp' + b'\x00' * 100
+        saved = self._run_download_with_content(tmp_path, "http://example.com/video.mp4", content)
+        assert saved == [("video.mp4", content)]
 
     def test_detects_audio_from_url(self, tmp_path):
-        self._run_download_with_content(tmp_path,
-            "http://example.com/track.mp3",
-            b'ID3' + b'\x00' * 100
-        )
+        content = b'ID3' + b'\x00' * 100
+        saved = self._run_download_with_content(tmp_path, "http://example.com/track.mp3", content)
+        assert saved == [("track.mp3", content)]
 
     def test_detects_pdf_from_url(self, tmp_path):
-        self._run_download_with_content(tmp_path,
-            "http://example.com/doc.pdf",
-            b'%PDF-1.4' + b'\x00' * 100
-        )
+        content = b'%PDF-1.4' + b'\x00' * 100
+        saved = self._run_download_with_content(tmp_path, "http://example.com/doc.pdf", content)
+        assert saved == [("doc.pdf", content)]
 
     def test_detects_js_mjs_from_url(self, tmp_path):
-        self._run_download_with_content(tmp_path,
-            "http://example.com/module.mjs",
-            b'export default function() {}'
-        )
+        content = b'export default function() {}'
+        saved = self._run_download_with_content(tmp_path, "http://example.com/module.mjs", content)
+        assert saved == [("module.mjs", content)]
 
     def test_detects_font_from_url(self, tmp_path):
-        self._run_download_with_content(tmp_path,
-            "http://example.com/font.woff2",
-            b'wOF2' + b'\x00' * 100
-        )
+        content = b'wOF2' + b'\x00' * 100
+        saved = self._run_download_with_content(tmp_path, "http://example.com/font.woff2", content)
+        assert saved == [("font.woff2", content)]
 
     def test_detects_css_from_content_signature(self, tmp_path):
-        """CSS content starting with @charset should be detected."""
-        self._run_download_with_content(tmp_path,
+        """CSS content starting with @charset should be detected: it goes
+        through the CSS path (charset rewritten to the UTF-8 it is saved as),
+        not the HTML one (which would wrap it in <body>)."""
+        saved = self._run_download_with_content(tmp_path,
             "http://example.com/mysterious",
             b'@charset "UTF-8"; body { margin: 0; }'
         )
+        assert [data for _, data in saved] == [b'@charset "utf-8"; body { margin: 0; }']
 
     def test_html_processing_error_saves_raw(self, tmp_path):
         """If HTML processing fails, raw content should still be saved."""
         dl = _make_downloader()
         dl.config.output_dir = str(tmp_path)
         dl.config.max_files = 1
-        dl.download_file = Mock(return_value=b'<html><body>Test</body></html>')
+        content = b'<html><body>Test</body></html>'
+        dl.download_file = Mock(return_value=content)
         dl._process_html = Mock(side_effect=Exception("parse error"))
         dl.download()
+        assert (tmp_path / "index.html").read_bytes() == content
 
     def test_squarespace_cdn_in_inline_styles(self, tmp_path):
         """Squarespace CDN URLs in inline styles should be rewritten."""
@@ -1847,6 +1851,9 @@ class TestContentTypeDetection:
             return result_html, []
         dl._process_html = limited_process
         dl.download()
+        saved = (tmp_path / "index.html").read_text()
+        assert "url(images.squarespace-cdn.com/content/bg.jpg)" in saved
+        assert "https://images.squarespace-cdn.com" not in saved
 
 
 # ===================================================================

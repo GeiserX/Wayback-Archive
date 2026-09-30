@@ -1,8 +1,10 @@
 name: Release
 
 on:
+  # `created` never fires for a draft; `published` covers a direct release
+  # and a draft that is published later.
   release:
-    types: [created]
+    types: [published]
   workflow_dispatch:
 
 jobs:
@@ -16,6 +18,17 @@ jobs:
       uses: actions/setup-python@v7
       with:
         python-version: "3.11"
+
+    # A tag that disagrees with __version__ would build and upload a version
+    # nobody asked for. The package root has no imports, so this needs no deps.
+    - name: Check the tag matches the package version
+      if: github.event_name == 'release'
+      run: |
+        version=$(python -c "import wayback_archive; print(wayback_archive.__version__)")
+        if [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
+          echo "::error::Tag $GITHUB_REF_NAME does not match wayback_archive.__version__ $version"
+          exit 1
+        fi
 
     - name: Install build dependencies
       run: |

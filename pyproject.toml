@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "wayback-archive"
 description = "Download archived websites from the Wayback Machine for offline viewing"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = "GPL-3.0-or-later"
 authors = [{ name = "GeiserX" }]
 classifiers = [
@@ -14,9 +14,9 @@ classifiers = [
     "Intended Audience :: Developers",
     "Topic :: Software Development :: Build Tools",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
 ]
 dynamic = ["version", "dependencies"]
 
@@ -32,3 +32,11 @@ dependencies = { file = ["config/requirements.txt"] }
 
 [tool.setuptools.packages.find]
 include = ["wayback_archive*"]
+
+# Coverage flags are left to CI, which passes them explicitly.
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = ["--strict-markers", "--tb=short"]
