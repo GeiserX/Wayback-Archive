@@ -1,7 +1,6 @@
 include README.md
 include LICENSE
 include config/requirements.txt
-include .env.example
 recursive-include wayback_archive *.py
 
 

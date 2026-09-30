@@ -1,6 +1,6 @@
 # Configuration
 
-All options are set via environment variables. You can also use a `.env` file.
+All options are set via environment variables. You can also put them in a `.env` file in the directory you run the command from (or one of its parents); variables already set in the environment win.
 
 ## Required
 

@@ -467,3 +467,28 @@ class TestMaxFilesBoundsRequests:
         images_tried = {url.rsplit("/", 1)[-1] for url, _ in dl.session.get.calls if ".png" in url}
         assert len(images_tried) == 1
         assert len(dl.session.get.calls) <= 1 + 4
+
+
+class TestDotenv:
+    def test_cli_reads_dotenv_from_the_working_directory(self, monkeypatch, tmp_path):
+        """The package lives outside tmp_path, so only a cwd search finds this file."""
+        (tmp_path / ".env").write_text(
+            f"WAYBACK_URL=https://web.archive.org/web/{TS}/http://from-dotenv.example/\n"
+            f"OUTPUT_DIR={tmp_path / 'out'}\n"
+        )
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("WAYBACK_URL", raising=False)
+        monkeypatch.delenv("OUTPUT_DIR", raising=False)
+        seen = {}
+
+        class FakeDownloader:
+            def __init__(self, config):
+                seen["config"] = config
+
+            def download(self):
+                pass
+
+        monkeypatch.setattr(cli, "WaybackDownloader", FakeDownloader)
+        cli.main()
+        assert seen["config"].wayback_url.endswith("/http://from-dotenv.example/")
+        assert seen["config"].output_dir == str(tmp_path / "out")
