@@ -10,6 +10,18 @@
 8. **URL rewriting** -- Converts all URLs to relative paths for offline serving
 9. **Preservation** -- Maintains icon groups, button links, and cookie consent functionality
 
+## Where requests go
+
+Every file is requested from the Wayback Machine (`web.archive.org`). The tool never fetches the archived site's own domain, or any other host, from the live Internet: the domain may belong to someone else today, and what it serves now is not the archive.
+
+The one exception is a short list of well-known CDN hosts. When the Wayback Machine does not have a file on one of these, the tool fetches it live, without following redirects:
+
+- Google Fonts: `fonts.googleapis.com`, `fonts.gstatic.com`
+- jQuery: `code.jquery.com` (also the source of the jQuery 3.7.1 replacement when a site's own `jquery.min.js` is missing)
+- Squarespace: `static1.squarespace.com`, `static.squarespace.com`, `images.squarespace-cdn.com`, `sqspcdn.com` and its subdomains
+
+A host matches only exactly or as a subdomain (`assets.sqspcdn.com`), never by containing the name (`sqspcdn.com.example.net`, `sqspcdn.com@10.0.0.1`). Anything else the Wayback Machine does not have is reported as failed.
+
 ## Project structure
 
 ```

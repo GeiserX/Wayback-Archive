@@ -37,6 +37,19 @@ class WaybackDownloader:
     # Google Fonts hosts: the stylesheet host and the font file host.
     GOOGLE_FONT_HOSTS = ("fonts.googleapis.com", "fonts.gstatic.com")
 
+    SQUARESPACE_CDN_HOSTS = (
+        "static1.squarespace.com",
+        "static.squarespace.com",
+        "images.squarespace-cdn.com",
+        "definitions.sqspcdn.com",
+        "sqspcdn.com",
+    )
+
+    # The only hosts ever fetched from the live Internet, when Wayback does
+    # not have the file. The archived site's own domain is never on it: it may
+    # belong to someone else today, and what it serves now is not the archive.
+    LIVE_FALLBACK_HOSTS = GOOGLE_FONT_HOSTS + ("code.jquery.com",) + SQUARESPACE_CDN_HOSTS
+
     # Common tracker/analytics patterns
     TRACKER_PATTERNS = [
         r"google-analytics\.com",
@@ -172,14 +185,7 @@ class WaybackDownloader:
 
     def _is_squarespace_cdn(self, url: str) -> bool:
         """Check if URL is from Squarespace CDN (should be downloaded)."""
-        squarespace_domains = [
-            'static1.squarespace.com',
-            'static.squarespace.com',
-            'images.squarespace-cdn.com',
-            'definitions.sqspcdn.com',
-            'sqspcdn.com'
-        ]
-        return _host_matches(url, squarespace_domains)
+        return _host_matches(url, self.SQUARESPACE_CDN_HOSTS)
 
     @staticmethod
     def _is_html_url(url: str, parsed=None) -> bool:
@@ -707,7 +713,8 @@ class WaybackDownloader:
         
         If the file returns 404 at the original timestamp, searches nearby
         timestamps to find when the file was available.
-        If all Wayback attempts fail, tries downloading from the original live URL.
+        If all Wayback attempts fail and the URL is on a well-known CDN
+        (LIVE_FALLBACK_HOSTS), tries that CDN live.
         """
         # Determine if this is an HTML page (we should NOT fallback to live for HTML)
         parsed = urlparse(url)
@@ -819,58 +826,46 @@ class WaybackDownloader:
                         except:
                             continue
                 
-                # All Wayback attempts failed - try original live URL as fallback (only for assets, not HTML pages)
+                # All Wayback attempts failed - try a well-known CDN live (only for assets, not HTML pages)
                 if not is_html_page:
-                    try:
-                        print(f"         🔄 Wayback failed, trying original URL: {url[:80]}...", flush=True)
-                        live_response = self.session.get(
-                            url, timeout=10, allow_redirects=True
-                        )
-                        live_response.raise_for_status()
-                        content = live_response.content
-                        
-                        # Check if font file is corrupted
-                        if self._is_corrupted_font(content, url):
-                            normalized_url = self._normalize_url(url, self.config.base_url)
-                            self.corrupted_fonts.add(normalized_url)
-                            print(f"         ⚠️  Font file is corrupted (HTML error page) - will be removed from CSS", flush=True)
-                            return None
-                        
-                        print(f"         ✓ Downloaded from original URL (fallback)", flush=True)
-                        return content
-                    except requests.exceptions.HTTPError:
-                        pass
-                    except requests.exceptions.Timeout:
-                        pass
-                    except Exception:
-                        pass
+                    return self._fetch_from_live_cdn(url)
             # Other HTTP errors - skip silently
         except requests.exceptions.Timeout:
-            # Timeout on Wayback - try original URL as fallback (only for assets)
+            # Timeout on Wayback - try a well-known CDN live (only for assets)
             if not is_html_page:
-                try:
-                    print(f"         🔄 Wayback timeout, trying original URL: {url[:80]}...", flush=True)
-                    live_response = self.session.get(
-                        url, timeout=10, allow_redirects=True
-                    )
-                    live_response.raise_for_status()
-                    content = live_response.content
-                    
-                    # Check if font file is corrupted
-                    if self._is_corrupted_font(content, url):
-                        normalized_url = self._normalize_url(url, self.config.base_url)
-                        self.corrupted_fonts.add(normalized_url)
-                        print(f"         ⚠️  Font file is corrupted (HTML error page) - will be removed from CSS", flush=True)
-                        return None
-                    
-                    print(f"         ✓ Downloaded from original URL (fallback)", flush=True)
-                    return content
-                except Exception:
-                    pass
+                return self._fetch_from_live_cdn(url)
         except Exception:
             pass
         
         return None
+
+    def _fetch_from_live_cdn(self, url: str) -> Optional[bytes]:
+        """Fetch a file Wayback does not have, if it lives on a well-known CDN.
+
+        Anything not on LIVE_FALLBACK_HOSTS returns None without a request.
+        Redirects are not followed, so an allowed host cannot send the request
+        anywhere else.
+        """
+        if not _host_matches(url, self.LIVE_FALLBACK_HOSTS):
+            return None
+        try:
+            print(f"         🔄 Wayback failed, trying CDN: {url[:80]}...", flush=True)
+            live_response = self.session.get(url, timeout=10, allow_redirects=False)
+            if live_response.status_code != 200:
+                return None
+            content = live_response.content
+        except Exception:
+            return None
+
+        # Check if font file is corrupted
+        if self._is_corrupted_font(content, url):
+            normalized_url = self._normalize_url(url, self.config.base_url)
+            self.corrupted_fonts.add(normalized_url)
+            print(f"         ⚠️  Font file is corrupted (HTML error page) - will be removed from CSS", flush=True)
+            return None
+
+        print(f"         ✓ Downloaded from CDN (live fallback)", flush=True)
+        return content
     
     def _get_file_type_from_url(self, url: str) -> str:
         """Get a human-readable file type from URL."""
@@ -2131,20 +2126,7 @@ class WaybackDownloader:
             if not content:
                 # Try CDN fallback for critical jQuery files if Wayback fails
                 if "jquery.min.js" in url.lower() and "cdn" not in url.lower():
-                    cdn_urls = [
-                        "https://code.jquery.com/jquery-3.7.1.min.js",
-                        "https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js",
-                    ]
-                    for cdn_url in cdn_urls:
-                        try:
-                            print(f"         🔄 Trying CDN fallback: {cdn_url}", flush=True)
-                            cdn_response = self.session.get(cdn_url, timeout=10, allow_redirects=True)
-                            cdn_response.raise_for_status()
-                            content = cdn_response.content
-                            print(f"         ✓ Downloaded from CDN fallback", flush=True)
-                            break
-                        except:
-                            continue
+                    content = self._fetch_from_live_cdn("https://code.jquery.com/jquery-3.7.1.min.js")
                 
                 if not content:
                     files_failed += 1
