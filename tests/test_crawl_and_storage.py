@@ -289,6 +289,7 @@ class TestOneBadPathFailsOneFile:
         [
             ("/" + "a" * 300 + "/x.png", None),
             ("/a.png", "/a.png/b.png"),
+            ("/a.png/b.png", "/a.png"),
         ],
     )
     def test_run_continues_after_os_error(self, tmp_path, first, second):
@@ -303,6 +304,26 @@ class TestOneBadPathFailsOneFile:
         dl, files, out, _ = _run(tmp_path, pages)
         assert "logo.png" in files
         assert "Files failed: 1" in out
+
+    def test_page_whose_path_is_a_directory_fails_alone(self, tmp_path):
+        site = "https://example.com"
+        # /d.html/i.png is stored first, so /d.html is already a directory.
+        page = (
+            f'<html><body><img src="{site}/d.html/i.png"><a href="{site}/next.html">n</a>'
+            f'<img src="{site}/logo.png"></body></html>'
+        ).encode()
+        png = b"\x89PNG\r\n\x1a\nxx"
+        pages = {
+            site + "/": page,
+            site + "/next.html": f'<html><body><a href="{site}/d.html">d</a></body></html>'.encode(),
+            site + "/d.html/i.png": png,
+            site + "/d.html": b"<html><body>d</body></html>",
+            site + "/logo.png": png,
+        }
+        _, files, out, _ = _run(tmp_path, pages)
+        assert {"d.html/i.png", "logo.png"} <= files
+        assert "Files failed: 1" in out
+
 
 class TestTextIsDecodedNotDropped:
     """E2E-3, html-processing-2, download-loop-004."""
@@ -351,6 +372,18 @@ class TestTextIsDecodedNotDropped:
         # Saved as UTF-8, so the declaration must say so.
         assert '@charset "utf-8"' in saved and "iso-8859-1" not in saved
 
+
+    def test_latin1_label_means_windows_1252(self, tmp_path):
+        body = (
+            '<html><head><meta charset="iso-8859-1"></head><body>5\x80 caf\xe9</body></html>'
+        ).encode("latin-1")
+        assert "5€ café" in self._saved(tmp_path, body)
+
+    def test_latin1_script(self, tmp_path):
+        page = b'<html><head><script src="https://example.com/a.js"></script></head><body></body></html>'
+        js = 'var d = "Sábado";'.encode("latin-1")
+        saved = self._saved(tmp_path, page, name="a.js", pages={"https://example.com/a.js": js})
+        assert "Sábado" in saved
 
     def test_utf8_page_with_one_stray_byte(self, tmp_path):
         # A UTF-8 template with one pasted windows-1252 apostrophe.
