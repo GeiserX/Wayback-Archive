@@ -163,6 +163,8 @@ class WaybackDownloader:
         self._kind_by_path: Dict[str, str] = {}
         # Charset named by the last response download_file read.
         self._last_charset: Optional[str] = None
+        # The URL that response finally came from, after redirects.
+        self._last_final_url: Optional[str] = None
         # CDX lookups for bad captures: how many this run, and how many
         # failed in a row. CDX is slow and often down, so both are capped.
         self._cdx_lookups = 0
@@ -1004,6 +1006,7 @@ class WaybackDownloader:
         content_type = str(getattr(response, "headers", {}).get("Content-Type") or "")
         match = re.search(r"charset\s*=\s*[\"']?([\w.:-]+)", content_type, re.IGNORECASE)
         self._last_charset = match.group(1) if match else None
+        self._last_final_url = getattr(response, "url", None)
         return response.content
 
     def _decode_text(self, content: bytes, charset: Optional[str] = None, is_html: bool = False) -> str:
@@ -2282,13 +2285,32 @@ class WaybackDownloader:
 
     MAX_CONSECUTIVE_REFUSALS = 5
 
+    def _follow_start_redirect(self, url: str) -> str:
+        """When the start capture redirected to another host, crawl that host.
+
+        Otherwise every link on the page looks external and the archive is
+        one broken page. Returns the URL the page actually came from.
+        """
+        final = self._extract_original_url_from_path(self._last_final_url or "")
+        if not final:
+            return url
+        parsed = urlparse(final)
+        host = self._strip_default_port(parsed.netloc.lower(), parsed.scheme)
+        if not host or host.removeprefix("www.") == self.config.domain.lower().removeprefix("www."):
+            return url
+        print(f"         ⚠️  The capture of {url} redirects to {final}; archiving {host} instead", flush=True)
+        self.config.base_url = final
+        self.config.domain = host
+        return final
+
     def download(self):
         """Main download method."""
         # Create output directory
         Path(self.config.output_dir).mkdir(parents=True, exist_ok=True)
 
         # Start with the main page
-        queue = [self.config.base_url]
+        start_url = self.config.base_url
+        queue = [start_url]
         # Visited and queued URLs are keyed by the file they are stored as:
         # http/https and www twins, or ?v= cache-busters, are one file and are
         # fetched once, while each Google Fonts family set has its own file.
@@ -2384,6 +2406,8 @@ class WaybackDownloader:
                 files_failed += 1
                 print(f"         ⚠️  Failed: got an HTML page instead of the file", flush=True)
                 continue
+            if url == start_url:
+                url = self._follow_start_redirect(url)
             charset = self._last_charset
             
             # Show file size

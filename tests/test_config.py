@@ -26,7 +26,6 @@ class TestConfig:
         assert config.make_internal_links_relative is True
         assert config.make_non_www is True
         assert config.make_www is False
-        assert config.keep_redirections is False
         assert config.output_dir == "./output"
 
     def test_env_variables(self):

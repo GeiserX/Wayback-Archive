@@ -58,9 +58,6 @@ class Config:
             # default still on, every host was flipped both ways.
             self.make_non_www = False
 
-        # Redirections
-        self.keep_redirections: bool = get_bool_env("KEEP_REDIRECTIONS", False)
-
         # Download limit (for testing): how many files to try. Unset or
         # empty means unlimited; anything but a positive integer is an error.
         max_files_str = (get_str_env("MAX_FILES") or "").strip()

@@ -46,7 +46,6 @@ All options are set via environment variables. You can also put them in a `.env`
 |---|---|---|
 | `MAKE_NON_WWW` | `true` | Convert www to non-www |
 | `MAKE_WWW` | `false` | Convert non-www to www; when `true`, `MAKE_NON_WWW` is ignored |
-| `KEEP_REDIRECTIONS` | `false` | Keep redirect pages |
 
 ## Testing
 

@@ -1,6 +1,6 @@
 # How it works
 
-1. **Initial download** -- Fetches the main page from the Wayback Machine
+1. **Initial download** -- Fetches the main page from the Wayback Machine. If that capture redirects to another host (a site that moved domains), the tool warns and archives the host that was actually captured
 2. **Link extraction** -- Parses HTML to find all referenced assets (links, images, CSS, JS)
 3. **CSS processing** -- Extracts font URLs, background images, and `@import` statements; downloads Google Fonts locally; detects corrupted font files
 4. **JS processing** -- Extracts dynamically loaded resources from JavaScript

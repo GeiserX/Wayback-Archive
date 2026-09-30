@@ -492,3 +492,42 @@ class TestDotenv:
         cli.main()
         assert seen["config"].wayback_url.endswith("/http://from-dotenv.example/")
         assert seen["config"].output_dir == str(tmp_path / "out")
+
+
+class TestStartRedirect:
+    def _site(self, final_original):
+        final = f"https://web.archive.org/web/20200102000000if_/{final_original}"
+        start = (
+            b"<!DOCTYPE html><html><body>"
+            b'<a href="/web/20200102000000/https://example-new.com/about">About</a>'
+            b'<a href="contact.html">Contact</a>'
+            b"</body></html>"
+        )
+
+        def handler(url, kwargs):
+            if url.endswith("/http://example.com/"):
+                return _Response(200, start, url=final)
+            if "example-new.com/about" in url or "example-new.com/contact.html" in url \
+                    or "www.example.com/about" in url or "www.example.com/contact.html" in url:
+                return _Response(200, GOOD_PAGE, url=url)
+            return _Response(404)
+
+        return handler
+
+    def test_a_start_capture_on_another_host_moves_the_crawl_there(self, tmp_path, capsys):
+        dl = _make_downloader(output_dir=tmp_path / "out")
+        dl.session.get = _Recorder(self._site("https://example-new.com/"))
+        dl.download()
+        requested = [url for url, _ in dl.session.get.calls]
+        assert any(u.endswith("/https://example-new.com/about") for u in requested)
+        assert any(u.endswith("/https://example-new.com/contact.html") for u in requested)
+        assert (tmp_path / "out" / "about.html").exists()
+        assert (tmp_path / "out" / "contact.html").exists()
+        assert "redirects to https://example-new.com/" in capsys.readouterr().out
+
+    def test_a_www_redirect_is_not_a_host_change(self, tmp_path, capsys):
+        dl = _make_downloader(output_dir=tmp_path / "out")
+        dl.session.get = _Recorder(self._site("http://www.example.com/"))
+        dl.download()
+        assert dl.config.domain == "example.com"
+        assert "redirects to" not in capsys.readouterr().out
