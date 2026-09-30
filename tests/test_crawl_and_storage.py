@@ -1,0 +1,125 @@
+"""The crawler queues the right URLs, stores each once under a usable name,
+and keeps the text.
+
+Relative links used to be queued exactly as written, so ``href="foo/"`` was
+requested from Wayback as the host ``foo``. Visited checks stripped the query
+but kept the scheme, so http/https twins were fetched twice while a second
+Google Fonts family was never fetched. ``.php`` pages were stored as
+downloads, ``/index.php`` next to ``/index.php/about`` crashed the run, and
+non-UTF-8 pages silently lost every accented character.
+"""
+
+import contextlib
+import io
+import os
+import re
+from pathlib import Path
+from urllib.parse import unquote, urlparse
+
+import pytest
+import requests
+
+from wayback_archive.config import Config
+from wayback_archive.downloader import WaybackDownloader
+
+TS = "20200101000000"
+
+
+def _make_downloader(wayback_url=None, output_dir=None):
+    os.environ["WAYBACK_URL"] = wayback_url or f"https://web.archive.org/web/{TS}/https://example.com/"
+    config = Config()
+    if output_dir is not None:
+        config.output_dir = str(output_dir)
+    return WaybackDownloader(config)
+
+
+@pytest.fixture(autouse=True)
+def _clean_env():
+    yield
+    os.environ.pop("WAYBACK_URL", None)
+
+
+class _Response:
+    def __init__(self, status, body=b"", content_type=None):
+        self.status_code = status
+        self.content = body
+        self.headers = {"Content-Type": content_type} if content_type else {}
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise requests.exceptions.HTTPError(response=self)
+
+
+class _Wayback:
+    """Serves the given originals from web.archive.org; everything else 404s.
+
+    Values are bytes, or (bytes, content_type).
+    """
+
+    def __init__(self, pages):
+        self.pages = pages
+        self.calls = []
+
+    def get(self, url, **kwargs):
+        self.calls.append(url)
+        if urlparse(url).hostname == "web.archive.org":
+            for original, value in self.pages.items():
+                if url.endswith("/" + original):
+                    body, content_type = value if isinstance(value, tuple) else (value, None)
+                    return _Response(200, body, content_type)
+        return _Response(404)
+
+
+def _run(tmp_path, pages, wayback_url=None):
+    output_dir = tmp_path / "out"
+    dl = _make_downloader(wayback_url=wayback_url, output_dir=output_dir)
+    dl.session = _Wayback(pages)
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        dl.download()
+    files = {
+        p.relative_to(output_dir).as_posix() for p in output_dir.rglob("*") if p.is_file()
+    }
+    return dl, files, out.getvalue(), output_dir
+
+
+def _hrefs(html):
+    return re.findall(r'(?:href|src)="?([^"\s>]+)', html)
+
+
+class TestWaybackUrlParsing:
+    """url-and-rewrite-9, -10 and download-loop-008."""
+
+    @pytest.mark.parametrize(
+        "wayback_url",
+        [
+            f"https://web.archive.org/web/{TS}if_/https://example.com/",
+            f"https://web.archive.org/web/{TS}id_/https://example.com/",
+            f"http://archive.org/web/{TS}/https://example.com/",
+            f"https://web.archive.org/web/{TS}/https://example.com:443/",
+        ],
+    )
+    def test_accepted_forms(self, wayback_url):
+        dl = _make_downloader(wayback_url=wayback_url)
+        assert dl.config.base_url == "https://example.com/"
+        assert dl.config.domain == "example.com"
+        assert dl.original_timestamp == TS
+
+    def test_default_port_does_not_make_the_site_external(self):
+        dl = _make_downloader(
+            wayback_url="https://web.archive.org/web/20050301000000/http://www.example.com:80/"
+        )
+        assert dl.config.domain == "www.example.com"
+        html = (
+            '<a href="/web/20050301000000/http://www.example.com/about.html">About</a>'
+            '<a href="/web/20050301000000/http://www.example.com:80/b.html">B</a>'
+        )
+        processed, links = dl._process_html(html, dl.config.base_url)
+        assert set(links) == {"http://www.example.com/about.html", "http://www.example.com:80/b.html"}
+        assert re.search(r'href="?about\.html', processed)
+        assert re.search(r'href="?b\.html', processed)
+
+    @pytest.mark.parametrize("ts, year, month", [("2015", 2015, 1), ("201506", 2015, 6)])
+    def test_short_timestamp_is_padded(self, ts, year, month):
+        dl = _make_downloader(wayback_url=f"https://web.archive.org/web/{ts}/https://example.com/")
+        assert (dl.original_datetime.year, dl.original_datetime.month) == (year, month)

@@ -128,33 +128,50 @@ class WaybackDownloader:
     def _parse_wayback_url(self):
         """Parse the Wayback Machine URL to extract the original URL."""
         # Extract timestamp and URL from Wayback URL
-        # Format: https://web.archive.org/web/TIMESTAMP/URL
+        # Format: https://web.archive.org/web/TIMESTAMP[modifier_]/URL, where
+        # the modifier is a replay mode such as if_ or id_ and archive.org is
+        # an alias of web.archive.org.
         match = re.match(
-            r"https?://web\.archive\.org/web/(\d+[a-z]*)/(.+)", self.config.wayback_url
+            r"https?://(?:web\.)?archive\.org(?::(?:80|443))?/web/(\d+)(?:[a-z]+_?)?/(.+)",
+            self.config.wayback_url,
         )
         if match:
             timestamp, original_url = match.groups()
             # Ensure original_url starts with http/https
             if not original_url.startswith(("http://", "https://")):
                 original_url = "http://" + original_url
+            # An explicit default port names the same site; keeping it made
+            # every port-less link on the site look external.
+            parsed_original = urlparse(original_url)
+            netloc = self._strip_default_port(parsed_original.netloc, parsed_original.scheme)
+            original_url = parsed_original._replace(netloc=netloc).geturl()
             self.config.base_url = original_url
-            self.config.domain = urlparse(original_url).netloc
+            self.config.domain = netloc
             # Store original timestamp for timeframe fallback
             self.original_timestamp = timestamp
-            # Parse timestamp to datetime for timeframe calculations
+            # Parse timestamp to datetime for timeframe calculations. A short
+            # timestamp (a year, a year and month) is valid Wayback input and
+            # means the start of that period, so pad it with the earliest
+            # valid month, day and time rather than zeros.
+            padded = timestamp[:14] + "00000101000000"[len(timestamp[:14]):]
             try:
-                numeric_part = re.match(r'(\d+)', timestamp).group(1)
-                if len(numeric_part) >= 14:
-                    self.original_datetime = datetime.strptime(numeric_part[:14], '%Y%m%d%H%M%S')
-                else:
-                    # Pad with zeros if needed
-                    padded = numeric_part + '0' * (14 - len(numeric_part))
-                    self.original_datetime = datetime.strptime(padded, '%Y%m%d%H%M%S')
-            except (ValueError, AttributeError):
-                # Fallback to current time if parsing fails
+                if len(timestamp) < 4:
+                    raise ValueError(timestamp)
+                self.original_datetime = datetime.strptime(padded, '%Y%m%d%H%M%S')
+            except ValueError:
+                # Not a date (/web/2/, /web/99999999999999/): Wayback serves
+                # the latest capture, so search around now.
                 self.original_datetime = datetime.now()
         else:
             raise ValueError(f"Invalid Wayback URL format: {self.config.wayback_url}")
+
+    @staticmethod
+    def _strip_default_port(netloc: str, scheme: str) -> str:
+        """Drop :80 from an http netloc and :443 from an https one."""
+        default = {"http": ":80", "https": ":443"}.get((scheme or "").lower())
+        if default and netloc.endswith(default):
+            return netloc[: -len(default)]
+        return netloc
 
     def _is_internal_url(self, url: str) -> bool:
         """Check if URL is internal to the site.
@@ -176,7 +193,7 @@ class WaybackDownloader:
         if parsed.scheme and parsed.scheme.lower() not in ('http', 'https', ''):
             return False
         
-        url_domain = parsed.netloc.lower().removeprefix("www.")
+        url_domain = self._strip_default_port(parsed.netloc.lower(), parsed.scheme).removeprefix("www.")
         base_domain = self.config.domain.lower().removeprefix("www.")
 
         # Treat Squarespace CDN as internal so we rewrite and download those assets.
@@ -376,7 +393,7 @@ class WaybackDownloader:
         
         # For internal URLs, preserve the scheme from base_url to ensure consistency
         # This prevents http:// URLs from being converted to https://
-        url_domain = parsed.netloc.lower().removeprefix("www.")
+        url_domain = self._strip_default_port(parsed.netloc.lower(), parsed.scheme).removeprefix("www.")
         base_domain = parsed_base.netloc.lower().removeprefix("www.")
         if url_domain == base_domain or url_domain == "":
             # Internal URL - use base_url scheme
