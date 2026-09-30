@@ -42,6 +42,8 @@ Needs Python 3.9 or newer. The source install and every setting are in [Getting 
 
 ## Documentation
 
+The documentation is published as a site at [geiserx.github.io/Wayback-Archive](https://geiserx.github.io/Wayback-Archive/). The same pages on GitHub:
+
 - [Getting started](https://github.com/GeiserX/Wayback-Archive/blob/main/docs/getting-started.md): install from PyPI or from source, and the first run
 - [Configuration](https://github.com/GeiserX/Wayback-Archive/blob/main/docs/configuration.md): every environment variable
 - [Usage](https://github.com/GeiserX/Wayback-Archive/blob/main/docs/usage.md): macOS, Linux and Windows examples
