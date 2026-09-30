@@ -87,6 +87,143 @@ def _hrefs(html):
     return re.findall(r'(?:href|src)="?([^"\s>]+)', html)
 
 
+class TestRelativeLinksAreQueuedAbsolute:
+    """E2E-1: a relative reference is resolved against the page, not sent raw."""
+
+    PAGE = (
+        '<html><head><link rel="stylesheet" href="s.css">'
+        '<script src="../app.js"></script></head><body>'
+        '<a href="foo/">f</a><a href="foo/#sec">f2</a>'
+        '<a href="/bar.html">b</a><a href="../up.html">u</a>'
+        '<a href="/web/20200101000000/https://example.com/docs/wb.html">w</a>'
+        '<img src="img/a.png"></body></html>'
+    )
+
+    def test_process_html_returns_absolute_urls_on_the_site(self):
+        dl = _make_downloader()
+        _, links = dl._process_html(self.PAGE, "https://example.com/docs/")
+        assert set(links) == {
+            "https://example.com/docs/s.css",
+            "https://example.com/app.js",
+            "https://example.com/docs/foo/",
+            "https://example.com/bar.html",
+            "https://example.com/up.html",
+            "https://example.com/docs/wb.html",
+            "https://example.com/docs/img/a.png",
+        }
+        assert len(links) == len(set(links))
+
+    def test_non_fetchable_references_are_never_queued(self):
+        dl = _make_downloader()
+        html = (
+            '<html><head><link rel="icon" href="data:image/png;base64,iVBOR"></head><body>'
+            '<a href="javascript:void(0)">j</a><a href="#top">t</a>'
+            '<a href="mailto:a@example.com">m</a><a href="tel:123">p</a>'
+            '<iframe src="about:blank"></iframe>'
+            '<img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">'
+            '<img src="blob:https://example.com/0f1e">'
+            "</body></html>"
+        )
+        processed, links = dl._process_html(html, "https://example.com/")
+        assert links == []
+        # html-processing-7: a data: URI is left alone, not turned into a path.
+        assert re.search(r'src="?data:image/gif;base64,R0lGODlhAQABAAAAACw="?', processed)
+        assert re.search(r'href="?data:image/png;base64,iVBOR[" ]', processed)
+
+    def test_download_requests_the_resolved_url(self, tmp_path):
+        page = b'<html><body><a href="foo/">f</a><img src="../logo.png"></body></html>'
+        dl, files, _, _ = _run(
+            tmp_path,
+            {
+                "https://example.com/docs/": page,
+                "https://example.com/docs/foo/": b"<html><body>foo</body></html>",
+                "https://example.com/logo.png": b"\x89PNG\r\n\x1a\nxx",
+            },
+            wayback_url=f"https://web.archive.org/web/{TS}/https://example.com/docs/",
+        )
+        assert "docs/foo/index.html" in files
+        assert "logo.png" in files
+        for url in dl.session.calls:
+            original = re.sub(r"^https://web\.archive\.org/web/\d+[a-z_]*/", "", url)
+            assert urlparse(original).hostname == "example.com", url
+
+    def test_picture_img_is_queued_once_and_absolute(self):
+        """html-processing-12: the <picture> pass re-queued the rewritten src."""
+        dl = _make_downloader(wayback_url=f"https://web.archive.org/web/{TS}/https://site.com/")
+        html = (
+            "<html><body><picture>"
+            f'<source srcset="/web/{TS}im_/https://site.com/img/a.webp">'
+            f'<img src="/web/{TS}im_/https://site.com/img/a.jpg">'
+            "</picture></body></html>"
+        )
+        _, links = dl._process_html(html, "https://site.com/blog/post")
+        assert all(link.startswith("https://site.com/") for link in links), links
+        assert links.count("https://site.com/img/a.jpg") == 1
+
+
+class TestOneFetchPerStoredFile:
+    """Visited and queued are keyed by the file a URL is stored as."""
+
+    def _gets(self, session, needle):
+        return [u for u in session.calls if needle in u]
+
+    def test_scheme_and_www_twins_are_fetched_once(self, tmp_path):
+        page = (
+            f'<html><body><a href="/web/{TS}/http://example.com/about">a</a>'
+            f'<a href="/web/{TS}/https://example.com/about">b</a>'
+            f'<a href="/web/{TS}/https://www.example.com/about">c</a>'
+            f'<img src="/web/{TS}im_/http://example.com/a.png">'
+            f'<img src="/web/{TS}im_/https://example.com/a.png"></body></html>'
+        ).encode()
+        dl, files, _, _ = _run(
+            tmp_path,
+            {
+                "https://example.com/": page,
+                "example.com/about": b"<html><body>about</body></html>",
+                "example.com/a.png": b"\x89PNG\r\n\x1a\nxx",
+            },
+        )
+        assert len(self._gets(dl.session, "/about")) == 1
+        assert len(self._gets(dl.session, "/a.png")) == 1
+        assert {"about.html", "a.png"} <= files
+
+    def test_cache_busters_still_collapse(self, tmp_path):
+        page = (
+            b'<html><head><link rel="stylesheet" href="https://example.com/s.css?v=1">'
+            b'<link rel="stylesheet" href="https://example.com/s.css?v=2"></head><body></body></html>'
+        )
+        dl, files, _, _ = _run(
+            tmp_path,
+            {"https://example.com/": page, "https://example.com/s.css?v=1": b"a{}"},
+        )
+        assert len(self._gets(dl.session, "/s.css")) == 1
+        assert "s.css" in files
+
+    def test_each_google_fonts_family_gets_its_own_file(self, tmp_path):
+        page = (
+            b'<html><head><link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Lato">'
+            b'<link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto">'
+            b"</head><body></body></html>"
+        )
+        dl, files, _, output_dir = _run(
+            tmp_path,
+            {
+                "https://example.com/": page,
+                "https://fonts.googleapis.com/css?family=Lato": b"/* lato */",
+                "https://fonts.googleapis.com/css?family=Roboto": b"/* roboto */",
+            },
+        )
+        css_files = sorted(f for f in files if f.startswith("fonts.googleapis.com/css-"))
+        assert len(css_files) == 2
+        index = (output_dir / "index.html").read_text()
+        linked = [h for h in _hrefs(index) if "fonts.googleapis.com" in h]
+        assert len(linked) == 2
+        for href in linked:
+            assert (output_dir / unquote(href)).is_file(), href
+        contents = {(output_dir / f).read_text() for f in css_files}
+        assert contents == {"/* lato */", "/* roboto */"}
+
+
 class TestTextIsDecodedNotDropped:
     """E2E-3, html-processing-2, download-loop-004."""
 
