@@ -598,3 +598,28 @@ class TestJqueryReplacement:
         live = [url for url, _ in dl.session.get.calls if "code.jquery.com" in url]
         assert live == [f"https://code.jquery.com/jquery-{version}.min.js"]
 
+    @pytest.mark.parametrize("src, tried", [
+        ("/js/jquery.min.js?ver=5.8.1", ["5.8.1", "3.7.1"]),
+        ("/js/jquery-1.9/jquery.min.js", ["1.9", "1.9.0"]),
+        ("/wp-includes/js/jquery/jquery.min.js?ver=1.0", ["1.0", "1.0.0", "3.7.1"]),
+    ])
+    def test_a_version_the_cdn_lacks_falls_back(self, tmp_path, src, tried):
+        """?ver= is often the WordPress version, and a two-part version has no
+        file on code.jquery.com: try x.y.0, then 3.7.1."""
+        start = f'<!DOCTYPE html><html><head><script src="{src}"></script></head><body></body></html>'.encode()
+        dl = _make_downloader(output_dir=tmp_path / "out")
+        on_cdn = ("https://code.jquery.com/jquery-1.9.0.min.js", "https://code.jquery.com/jquery-3.7.1.min.js")
+
+        def handler(url, kwargs):
+            if url.endswith("/http://example.com/"):
+                return _Response(200, start)
+            if url in on_cdn:
+                return _Response(200, b"/*! jQuery */", url=url)
+            return _Response(404)
+
+        dl.session.get = _Recorder(handler)
+        dl.download()
+        live = [url for url, _ in dl.session.get.calls if "code.jquery.com" in url]
+        assert live == [f"https://code.jquery.com/jquery-{v}.min.js" for v in tried]
+        saved = [p for p in (tmp_path / "out").rglob("jquery.min.js")]
+        assert len(saved) == 1 and saved[0].read_bytes().startswith(b"/*! jQuery */")

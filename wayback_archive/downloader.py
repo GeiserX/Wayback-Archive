@@ -2397,15 +2397,22 @@ class WaybackDownloader:
                 consecutive_refusals = 0
             if not content:
                 # Try CDN fallback for critical jQuery files if Wayback fails:
-                # the version the URL names, or 3.7.1 when it names none
+                # the version the URL names (x.y also as x.y.0), then 3.7.1.
+                # A ?ver= is often WordPress's version, not jQuery's.
                 if "jquery.min.js" in url.lower() and "cdn" not in url.lower():
                     match = re.search(
                         r"jquery[-./@]?v?(\d+\.\d+(?:\.\d+)?)|[?&]ver=(\d+\.\d+(?:\.\d+)?)", url, re.I
                     )
-                    version = (match.group(1) or match.group(2)) if match else "3.7.1"
-                    if not match:
-                        print(f"         jQuery version unknown; substituting {version}", flush=True)
-                    content = self._fetch_from_live_cdn(f"https://code.jquery.com/jquery-{version}.min.js")
+                    versions = []
+                    if match:
+                        named = match.group(1) or match.group(2)
+                        versions = [named] + ([named + ".0"] if named.count(".") == 1 else [])
+                    for version in dict.fromkeys(versions + ["3.7.1"]):
+                        if version == "3.7.1" and "3.7.1" not in versions:
+                            print(f"         jQuery version unknown or not on code.jquery.com; substituting 3.7.1", flush=True)
+                        content = self._fetch_from_live_cdn(f"https://code.jquery.com/jquery-{version}.min.js")
+                        if content:
+                            break
                 
                 if not content:
                     files_failed += 1
