@@ -2,23 +2,58 @@
 
 ## Prerequisites
 
-- Python 3.10 or higher
-- pip
+- Python 3.10 or newer (on 3.9, pip stops with `ResolutionImpossible`)
+- pipx or pip
 
 ## From PyPI
 
 ```bash
-pip install wayback-archive
-WAYBACK_URL="https://web.archive.org/web/20250417203037/http://example.com/" wayback-archive
+pipx install wayback-archive
 ```
 
-The copy lands in `./output` (set `OUTPUT_DIR` to change it). Serve it and open `http://localhost:8000`:
+pipx gives the command its own environment. Inside a virtual environment, pip works the same way:
 
 ```bash
-cd output && python3 -m http.server 8000
+pip install wayback-archive
 ```
 
-Every setting is in [Configuration](configuration.md); per-shell examples are in [Usage](usage.md).
+Homebrew Python and the system Python on Debian and Ubuntu refuse a bare `pip install` with `externally-managed-environment`, which is why pipx comes first. See [Troubleshooting](troubleshooting.md#pip-refuses-to-install-externally-managed-environment) for both fixes.
+
+Then give it one Wayback Machine URL:
+
+```bash
+WAYBACK_URL="https://web.archive.org/web/20070405072310/http://www.python.org/" MAX_FILES=50 wayback-archive
+```
+
+The copy lands in `./output` (set `OUTPUT_DIR` to change it). `MAX_FILES` keeps the first try short. The crawl fetches files in the order it finds them, so a short run can stop before a stylesheet that another stylesheet imports; drop `MAX_FILES` to fetch the whole site. Every setting is in [Configuration](configuration.md); per-shell examples are in [Usage](usage.md).
+
+## What a finished run looks like
+
+Each file prints a numbered line while it downloads. The run ends with a block like this one:
+
+```text
+======================================================================
+Download Complete!
+======================================================================
+Output directory: ./output
+Files successfully downloaded: 46
+Files failed: 4
+Files skipped (duplicates): 0
+Total files processed: 50
+======================================================================
+```
+
+`Files failed` counts pages and files the archive does not have at that timestamp or any nearby one; their links stay broken in the copy.
+
+Open the copy straight from disk:
+
+```bash
+open output/index.html        # macOS
+xdg-open output/index.html    # Linux
+start output\index.html       # Windows
+```
+
+A browser that blocks scripts on `file://` pages can use a local server instead: `cd output && python3 -m http.server 8000`, then open `http://localhost:8000`.
 
 ## From source
 
@@ -32,7 +67,7 @@ source venv/bin/activate  # macOS/Linux
 # venv\Scripts\activate   # Windows
 
 pip install -r config/requirements.txt
-WAYBACK_URL="https://web.archive.org/web/20250417203037/http://example.com/" python3 -m wayback_archive.cli
+WAYBACK_URL="https://web.archive.org/web/20070405072310/http://www.python.org/" python3 -m wayback_archive.cli
 ```
 
 To get the `wayback-archive` command from a checkout, install it in editable mode with `pip install -e .`.

@@ -3,7 +3,7 @@
 ## macOS / Linux
 
 ```bash
-export WAYBACK_URL="https://web.archive.org/web/20250417203037/http://example.com/"
+export WAYBACK_URL="https://web.archive.org/web/20070405072310/http://www.python.org/"
 export OUTPUT_DIR="./my_website"
 export REMOVE_CLICKABLE_CONTACTS="false"  # Keep email/phone links
 
@@ -13,7 +13,7 @@ python3 -m wayback_archive.cli
 ## Windows (PowerShell)
 
 ```powershell
-$env:WAYBACK_URL = "https://web.archive.org/web/20250417203037/http://example.com/"
+$env:WAYBACK_URL = "https://web.archive.org/web/20070405072310/http://www.python.org/"
 $env:OUTPUT_DIR = ".\my_website"
 $env:REMOVE_CLICKABLE_CONTACTS = "false"
 
@@ -23,7 +23,7 @@ python -m wayback_archive.cli
 ## Windows (CMD)
 
 ```cmd
-set WAYBACK_URL=https://web.archive.org/web/20250417203037/http://example.com/
+set WAYBACK_URL=https://web.archive.org/web/20070405072310/http://www.python.org/
 set OUTPUT_DIR=.\my_website
 set REMOVE_CLICKABLE_CONTACTS=false
 
@@ -35,12 +35,14 @@ python -m wayback_archive.cli
 Download a limited number of files to verify everything works:
 
 ```bash
-export WAYBACK_URL="https://web.archive.org/web/20250417203037/http://example.com/"
+export WAYBACK_URL="https://web.archive.org/web/20070405072310/http://www.python.org/"
 export MAX_FILES=5
 python3 -m wayback_archive.cli
 ```
 
 ## Preview the result
+
+The copy opens straight from disk: `open output/index.html` on macOS, `xdg-open output/index.html` on Linux, `start output\index.html` on Windows. A browser that blocks scripts on `file://` pages can use a local server instead:
 
 ```bash
 cd output && python3 -m http.server 8000

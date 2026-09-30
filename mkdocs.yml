@@ -1,18 +1,6 @@
-# mkdocs.yml for a GeiserX repo. Copy to the repo root, then:
-#   1. replace {{REPO}}, {{NAME}} and {{PITCH}};
-#   2. delete every nav line whose page the repo does not have (the strict
-#      build fails on a nav entry for a missing file, so a stale nav cannot
-#      deploy);
-#   3. copy templates/docs-theme.css to docs/stylesheets/theme.css and put the
-#      banner's two colours in it;
-#   4. write `mkdocs-material==9.7.7` to docs/requirements-docs.txt (exact pin; Material 9.7.x
-#      pins mkdocs<2 itself, and 9.7 is Material's last feature line).
-#   5. a docs site that lives under a product site (DeclaRenta) sets site_url to that
-#      subpath, e.g. https://declarenta.com/docs/, and builds into the product artifact.
-# The docs/ contract this file assumes is in new-repo/README-STANDARD.md.
 site_name: Wayback-Archive
 site_url: https://geiserx.github.io/Wayback-Archive/
-site_description: Download complete websites from the Wayback Machine for offline viewing.
+site_description: Rescue whole websites from the Wayback Machine.
 repo_url: https://github.com/GeiserX/Wayback-Archive
 repo_name: GeiserX/Wayback-Archive
 edit_uri: edit/main/docs/
@@ -23,10 +11,9 @@ strict: true
 
 theme:
   name: material
-  language: en  # es for a Spanish repo: it changes the UI strings, not the content.
-  # Uncomment when the repo has them. Both live under docs/images/.
-  # logo: images/logo.svg
-  # favicon: images/icon.svg
+  language: en
+  logo: images/logo.svg
+  favicon: images/icon.svg
   # Dark first: the first palette entry is the default, and the banners are dark.
   palette:
     - scheme: slate
@@ -79,8 +66,8 @@ validation:
 
 plugins:
   - search
-  # When a page is renamed (installation.md -> getting-started.md), keep the old URL alive:
-  # add `mkdocs-redirects==1.2.2` to docs/requirements-docs.txt and uncomment.
+  # installation.md and architecture.md were renamed before the site existed;
+  # README copies on PyPI still link the old names.
   - redirects:
       redirect_maps:
         installation.md: getting-started.md
@@ -125,8 +112,8 @@ extra:
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/GeiserX/Wayback-Archive
-    # - icon: fontawesome/brands/docker
-    #   link: https://hub.docker.com/r/drumsergio/{{IMAGE}}
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/wayback-archive/
 
 extra_css:
   - stylesheets/theme.css
@@ -144,17 +131,16 @@ exclude_docs: |
   notes/
   requirements-docs.txt
 
-# One entry per canonical page, in the contract's order. Delete the lines for
-# pages the repo does not have. A repo-specific page goes after the canonical
-# one it extends (a `Metrics` page after Usage, a `Security` page after
-# Configuration). The nav title must equal the page's H1.
 nav:
   - Home: index.md
-  - Getting started: getting-started.md
-  - Configuration: configuration.md
-  - Usage: usage.md
-  - Features: features.md
-  - How it works: how-it-works.md
-  - Troubleshooting: troubleshooting.md
-  - Development: development.md
-  - Related projects: related.md
+  - Get started:
+      - Getting started: getting-started.md
+      - Usage: usage.md
+      - Features: features.md
+  - Reference:
+      - Configuration: configuration.md
+      - How it works: how-it-works.md
+      - Troubleshooting: troubleshooting.md
+  - Development:
+      - Development: development.md
+      - Related projects: related.md
