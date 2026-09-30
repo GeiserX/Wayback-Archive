@@ -87,6 +87,34 @@ def _hrefs(html):
     return re.findall(r'(?:href|src)="?([^"\s>]+)', html)
 
 
+class TestHtmlIsNotSavedAsAnAsset:
+    """E2E-4: Wayback answers some asset requests with its own HTML page."""
+
+    WAYBACK_PAGE = b"<!DOCTYPE html>\n<html><head><title>Wayback Machine</title></head><body></body></html>"
+
+    def test_html_answer_to_asset_requests_is_rejected(self, tmp_path):
+        page = (
+            b'<html><head><link rel="stylesheet" href="https://example.com/s.css">'
+            b'<script src="https://example.com/app.js"></script></head><body>'
+            b'<img src="https://example.com/logo.png"><img src="https://example.com/ok.png">'
+            b"</body></html>"
+        )
+        _, files, out, _ = _run(
+            tmp_path,
+            {
+                "https://example.com/": page,
+                "https://example.com/s.css": self.WAYBACK_PAGE,
+                "https://example.com/app.js": self.WAYBACK_PAGE,
+                "https://example.com/logo.png": self.WAYBACK_PAGE,
+                "https://example.com/ok.png": b"\x89PNG\r\n\x1a\nxx",
+            },
+        )
+        assert "ok.png" in files
+        assert not {"s.css", "app.js", "logo.png"} & files
+        assert "Files failed: 3" in out
+        assert "HTML page" in out
+
+
 class TestWaybackUrlParsing:
     """url-and-rewrite-9, -10 and download-loop-008."""
 

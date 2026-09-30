@@ -863,6 +863,28 @@ class WaybackDownloader:
         
         return None
 
+    # Extensions of files that are never an HTML document.
+    ASSET_EXTENSIONS = frozenset({
+        ".jpg", ".jpeg", ".png", ".gif", ".svg", ".webp", ".ico", ".bmp", ".tiff",
+        ".woff", ".woff2", ".ttf", ".eot", ".otf", ".css", ".js", ".mjs",
+    })
+
+    def _is_html_instead_of_asset(self, content: bytes, url: str) -> bool:
+        """
+        True when an image, font, script or stylesheet came back as an HTML
+        document - Wayback answers some asset requests with its own page.
+        """
+        ext = os.path.splitext(urlparse(url).path.lower())[1]
+        expects_asset = (
+            ext in self.ASSET_EXTENSIONS
+            or self._is_google_fonts_css(url)
+            or self._referenced_kind(url) in ("stylesheet", "script", "image")
+        )
+        if not expects_asset:
+            return False
+        start = content[:512].lstrip(b"\xef\xbb\xbf \t\r\n").lower()
+        return start.startswith((b"<!doctype html", b"<html"))
+
     def _fetch_from_live_cdn(self, url: str) -> Optional[bytes]:
         """Fetch a file Wayback does not have, if it lives on a well-known CDN.
 
@@ -2118,6 +2140,11 @@ class WaybackDownloader:
                     files_failed += 1
                     print(f"         ⚠️  Failed to download", flush=True)
                     continue
+
+            if self._is_html_instead_of_asset(content, url):
+                files_failed += 1
+                print(f"         ⚠️  Failed: got an HTML page instead of the file", flush=True)
+                continue
             
             # Show file size
             size_kb = len(content) / 1024
