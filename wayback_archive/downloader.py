@@ -507,11 +507,14 @@ class WaybackDownloader:
                     netloc=self._strip_default_port(parsed.netloc, parsed.scheme),
                 )
 
-        # Handle www/non-www conversion
-        if self.config.make_non_www and parsed.netloc.startswith("www."):
-            parsed = parsed._replace(netloc=parsed.netloc[4:])
-        elif self.config.make_www and not parsed.netloc.startswith("www.") and parsed.netloc:
-            parsed = parsed._replace(netloc="www." + parsed.netloc)
+        # Handle www/non-www conversion, for the archived site's host only:
+        # www.gstatic.com and cdn.jsdelivr.net are other people's names.
+        site_domain = (self.config.domain or "").lower().removeprefix("www.")
+        if url_domain == site_domain:
+            if self.config.make_www and not parsed.netloc.startswith("www."):
+                parsed = parsed._replace(netloc="www." + parsed.netloc)
+            elif not self.config.make_www and self.config.make_non_www and parsed.netloc.startswith("www."):
+                parsed = parsed._replace(netloc=parsed.netloc[4:])
 
         # Remove fragment and query string for file identification
         # This ensures URLs with different query params or fragments point to the same file

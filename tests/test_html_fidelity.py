@@ -330,3 +330,32 @@ class TestExternalStylesheets:
             '</head><body></body></html>'
         ))
         assert soup.link["href"] == "https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/css/bootstrap.min.css"
+
+
+class TestWwwConversionOnlyForTheSite:
+    """MAKE_WWW / MAKE_NON_WWW apply to the archived site's host only."""
+
+    def test_make_www_leaves_third_party_hosts(self):
+        dl = _make_dl(MAKE_WWW="true")
+        soup, _ = _process(dl, (
+            f'<html><head><link rel="stylesheet" href="{W}cs_/https://cdn.jsdelivr.net/npm/bootstrap.css"></head></html>'
+        ))
+        assert soup.link["href"] == "https://cdn.jsdelivr.net/npm/bootstrap.css"
+
+    def test_make_non_www_leaves_third_party_hosts(self):
+        dl = _make_dl()
+        soup, _ = _process(dl, (
+            f'<html><head><link rel="stylesheet" href="{W}cs_/https://www.gstatic.com/x.css"></head></html>'
+        ))
+        assert soup.link["href"] == "https://www.gstatic.com/x.css"
+
+    def test_make_www_wins_over_make_non_www(self):
+        dl = _make_dl(MAKE_WWW="true", MAKE_INTERNAL_LINKS_RELATIVE="false")
+        dl.config.make_non_www = True
+        soup, _ = _process(dl, (
+            f'<html><body><a href="{W}/https://site.com/about">a</a>'
+            f'<a href="{W}/https://www.site.com/about2">b</a></body></html>'
+        ))
+        assert [a["href"] for a in soup.find_all("a")] == [
+            "https://www.site.com/about", "https://www.site.com/about2",
+        ]
