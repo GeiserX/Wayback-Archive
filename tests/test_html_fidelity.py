@@ -63,6 +63,13 @@ class TestWaybackToolbarScripts:
         assert "https://www.site.com/js/app.js" in links
         assert "https://site.com/js/protorel.js" in links
 
+    def test_site_static_js_bundle_is_kept(self):
+        # /static/js/ is where create-react-app puts the site's own bundles.
+        dl = _make_dl()
+        soup, links = _process(dl, '<html><head><script src="/static/js/main.abc.js"></script></head><body></body></html>')
+        assert soup.script["src"] == "static/js/main.abc.js"
+        assert "https://site.com/static/js/main.abc.js" in links
+
 
 class TestTrackerAndAdRemovalMatchesHostsAndFileNames:
     """REMOVE_TRACKERS / REMOVE_ADS are on by default, so a loose word match

@@ -1660,12 +1660,13 @@ class WaybackDownloader:
             # The toolbar is served from archive.org outside /web/ (today
             # web-static.archive.org/_static/). The page's own scripts replay
             # through web.archive.org/web/..., so that host alone says
-            # nothing: matching it deleted the site's scripts.
+            # nothing: matching it deleted the site's scripts. A bare
+            # /static/js/ is the site's own (create-react-app bundles).
             parsed_src = urlparse(src)
             is_archive_host = (parsed_src.hostname or "").endswith("archive.org")
             if (
                 (is_archive_host and not parsed_src.path.startswith("/web/"))
-                or src.startswith(("/_static/", "/static/js/"))
+                or src.startswith("/_static/")
                 or "bundle-playback.js" in src or "wombat.js" in src or "ruffle.js" in src
             ):
                 script.decompose()
