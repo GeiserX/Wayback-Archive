@@ -57,17 +57,24 @@ class Config:
         self.make_internal_links_relative: bool = get_bool_env("MAKE_INTERNAL_LINKS_RELATIVE", True)
         self.make_non_www: bool = get_bool_env("MAKE_NON_WWW", True)
         self.make_www: bool = get_bool_env("MAKE_WWW", False)
+        if self.make_www:
+            # Asking for www means never stripping it; with the MAKE_NON_WWW
+            # default still on, every host was flipped both ways.
+            self.make_non_www = False
 
         # Redirections
         self.keep_redirections: bool = get_bool_env("KEEP_REDIRECTIONS", False)
 
-        # Download limit (for testing - set MAX_FILES to limit downloads)
-        # If MAX_FILES is not set, downloads are unlimited
-        max_files_str = get_str_env("MAX_FILES")
-        if max_files_str and max_files_str.strip().isdigit():
-            self.max_files: Optional[int] = int(max_files_str.strip())
-        else:
-            self.max_files: Optional[int] = None  # Unlimited downloads
+        # Download limit (for testing): how many files to try. Unset or
+        # empty means unlimited; anything but a positive integer is an error.
+        max_files_str = (get_str_env("MAX_FILES") or "").strip()
+        self.max_files: Optional[int] = None
+        self.max_files_error: Optional[str] = None
+        if max_files_str:
+            if max_files_str.isascii() and max_files_str.isdigit() and int(max_files_str) > 0:
+                self.max_files = int(max_files_str)
+            else:
+                self.max_files_error = f"MAX_FILES must be a positive whole number, got {max_files_str!r}"
 
         # Internal state
         self.base_url: Optional[str] = None
@@ -79,6 +86,8 @@ class Config:
         """Validate configuration."""
         if not self.wayback_url:
             return False, "WAYBACK_URL environment variable is required"
+        if self.max_files_error:
+            return False, self.max_files_error
         return True, None
 
     def __repr__(self) -> str:

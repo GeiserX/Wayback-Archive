@@ -45,13 +45,13 @@ All options are set via environment variables. You can also use a `.env` file.
 | Variable | Default | Description |
 |---|---|---|
 | `MAKE_NON_WWW` | `true` | Convert www to non-www |
-| `MAKE_WWW` | `false` | Convert non-www to www |
+| `MAKE_WWW` | `false` | Convert non-www to www; when `true`, `MAKE_NON_WWW` is ignored |
 | `KEEP_REDIRECTIONS` | `false` | Keep redirect pages |
 
 ## Testing
 
 | Variable | Default | Description |
 |---|---|---|
-| `MAX_FILES` | unlimited | Limit number of files to download |
+| `MAX_FILES` | unlimited | Stop after trying this many files, failed ones included. Must be a positive whole number |
 
 See [Usage](usage.md) for examples per shell.

@@ -427,3 +427,43 @@ class TestThrottling:
         dl.download()
         pages = {url.rsplit("/", 1)[-1] for url, _ in dl.session.get.calls if "/p" in url}
         assert len(pages) == 9
+
+
+class TestConfigValidation:
+    @pytest.mark.parametrize("value", ["0", "-1", "5 files", "1e2", "abc"])
+    def test_max_files_that_is_not_a_positive_integer_is_an_error(self, value):
+        os.environ["WAYBACK_URL"] = f"https://web.archive.org/web/{TS}/http://example.com/"
+        os.environ["MAX_FILES"] = value
+        ok, error = Config().validate()
+        assert not ok
+        assert "MAX_FILES" in error and value in error
+
+    @pytest.mark.parametrize("value, expected", [("3", 3), (" 7 ", 7), ("", None)])
+    def test_valid_max_files(self, value, expected):
+        os.environ["WAYBACK_URL"] = f"https://web.archive.org/web/{TS}/http://example.com/"
+        os.environ["MAX_FILES"] = value
+        config = Config()
+        assert config.validate() == (True, None)
+        assert config.max_files == expected
+
+    def test_make_www_alone_adds_www_and_never_strips_it(self):
+        os.environ["MAKE_WWW"] = "true"
+        dl = _make_downloader()
+        base = "http://example.com/"
+        assert dl._normalize_url("http://www.example.com/a", base) == "http://www.example.com/a"
+        assert dl._normalize_url("http://example.com/b", base) == "http://www.example.com/b"
+
+
+class TestMaxFilesBoundsRequests:
+    def test_failed_attempts_count_toward_max_files(self, tmp_path):
+        images = "".join(f'<img src="/i{n}.png">' for n in range(10))
+        start = f"<!DOCTYPE html><html><body>{images}</body></html>".encode()
+        os.environ["MAX_FILES"] = "2"
+        dl = _make_downloader(output_dir=tmp_path / "out")
+        dl.session.get = _Recorder(
+            lambda url, kwargs: _Response(200, start) if url.endswith("/http://example.com/") else _Response(404)
+        )
+        dl.download()
+        images_tried = {url.rsplit("/", 1)[-1] for url, _ in dl.session.get.calls if ".png" in url}
+        assert len(images_tried) == 1
+        assert len(dl.session.get.calls) <= 1 + 4

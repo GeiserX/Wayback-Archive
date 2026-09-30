@@ -1626,6 +1626,8 @@ class TestConfigAdditional:
         os.environ["MAX_FILES"] = "abc"
         config = Config()
         assert config.max_files is None
+        # Junk used to mean unlimited; it is now a configuration error.
+        assert config.validate()[0] is False
 
     def test_max_files_empty(self):
         os.environ["WAYBACK_URL"] = "https://web.archive.org/web/20250417203037/http://example.com/"

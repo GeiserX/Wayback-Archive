@@ -2318,8 +2318,10 @@ class WaybackDownloader:
         print(f"{'='*70}\n", flush=True)
 
         while queue:
-            # Check if we've reached the file limit (for testing)
-            if self.config.max_files and files_downloaded >= self.config.max_files:
+            # Check if we've reached the file limit (for testing). Failed
+            # attempts count too, or a limited run could make hundreds of
+            # requests past the limit.
+            if self.config.max_files and len(self.config.visited_urls) >= self.config.max_files:
                 print(f"\n{'='*70}", flush=True)
                 print(f"⚠️  Reached MAX_FILES limit ({self.config.max_files}) - stopping download", flush=True)
                 print(f"{'='*70}", flush=True)
