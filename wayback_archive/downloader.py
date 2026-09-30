@@ -12,6 +12,8 @@ from urllib.parse import urljoin, urlparse, unquote, quote
 from pathlib import Path
 from typing import Optional, Set, Dict, List, Tuple
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from bs4 import BeautifulSoup, Comment
 from bs4.dammit import EncodingDetector
 from wayback_archive.config import Config
@@ -32,6 +34,16 @@ def _host_matches(url: str, hosts) -> bool:
         return False
     host = (parsed.hostname or "").lower()
     return any(host == h or host.endswith("." + h) for h in hosts)
+
+
+class _PoliteRetry(Retry):
+    """Waits out a 429 as Retry-After asks, but never longer than RETRY_AFTER_MAX."""
+
+    RETRY_AFTER_MAX = 30
+
+    def get_retry_after(self, response):
+        retry_after = super().get_retry_after(response)
+        return None if retry_after is None else min(retry_after, self.RETRY_AFTER_MAX)
 
 
 class WaybackDownloader:
@@ -129,6 +141,15 @@ class WaybackDownloader:
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
             }
         )
+        # Wayback throttles with 429: wait and retry a few times. A 5xx is
+        # not retried, since Wayback replays archived 5xx captures as such.
+        self.session.mount("https://web.archive.org/", HTTPAdapter(max_retries=_PoliteRetry(
+            total=3, connect=0, read=0, other=0, status_forcelist=[429],
+            backoff_factor=2, respect_retry_after_header=True, raise_on_status=False,
+        )))
+        # Why the last download_file call failed when Wayback refused it:
+        # "throttled" (429) or "connection" (no answer); None otherwise.
+        self._last_failure: Optional[str] = None
         # Track corrupted font files (HTML error pages instead of actual fonts)
         self.corrupted_fonts: Set[str] = set()
         # Font URLs already probed this run, so each is fetched at most once
@@ -857,6 +878,7 @@ class WaybackDownloader:
         (LIVE_FALLBACK_HOSTS), tries that CDN live.
         """
         self._last_charset = None
+        self._last_failure = None
         # Determine if this is an HTML page (we should NOT fallback to live for HTML)
         parsed = urlparse(url)
         path_lower = parsed.path.lower()
@@ -877,6 +899,10 @@ class WaybackDownloader:
                 response = self.session.get(
                     wayback_url_if, timeout=15, allow_redirects=True
                 )
+                if response.status_code == 429:
+                    # Still throttled after the retries; the plain URL would be too.
+                    self._last_failure = "throttled"
+                    return None
                 reason = self._bad_capture_reason(response)
                 if reason:
                     return self._fetch_nearest_good_capture(url, reason, is_html_page)
@@ -904,6 +930,9 @@ class WaybackDownloader:
                     except Exception:
                         # If we can't decode, assume it's good
                         return content
+            except requests.exceptions.ConnectionError:
+                self._last_failure = "connection"
+                return None
             except Exception:
                 # If if_ version fails, fall through to regular download
                 pass
@@ -954,11 +983,17 @@ class WaybackDownloader:
                 # All Wayback attempts failed - try a well-known CDN live (only for assets, not HTML pages)
                 if not is_html_page:
                     return self._fetch_from_live_cdn(url)
+            elif e.response is not None and e.response.status_code == 429:
+                self._last_failure = "throttled"
             # Other HTTP errors - skip silently
-        except requests.exceptions.Timeout:
+        except requests.exceptions.Timeout as e:
+            if isinstance(e, requests.exceptions.ConnectionError):
+                self._last_failure = "connection"
             # Timeout on Wayback - try a well-known CDN live (only for assets)
             if not is_html_page:
                 return self._fetch_from_live_cdn(url)
+        except requests.exceptions.ConnectionError:
+            self._last_failure = "connection"
         except Exception:
             pass
         
@@ -2245,6 +2280,8 @@ class WaybackDownloader:
             return None
         return parsed._replace(fragment="").geturl()
 
+    MAX_CONSECUTIVE_REFUSALS = 5
+
     def download(self):
         """Main download method."""
         # Create output directory
@@ -2266,6 +2303,10 @@ class WaybackDownloader:
         files_downloaded = 0
         files_failed = 0
         files_skipped = 0
+        # Requests in a row that Wayback throttled or did not answer. Past
+        # MAX_CONSECUTIVE_REFUSALS the run stops rather than hammer it.
+        consecutive_refusals = 0
+        stop_reason = None
 
         print(f"\n{'='*70}", flush=True)
         print(f"Wayback-Archive Downloader", flush=True)
@@ -2316,6 +2357,17 @@ class WaybackDownloader:
             self.config.visited_urls.add(normalized_for_tracking)
 
             content = self.download_file(url)
+            if self._last_failure:
+                consecutive_refusals += 1
+                if consecutive_refusals >= self.MAX_CONSECUTIVE_REFUSALS:
+                    files_failed += 1
+                    stop_reason = (
+                        f"Stopped: the Wayback Machine refused {consecutive_refusals} requests in a row "
+                        f"(last: {self._last_failure}); try again later"
+                    )
+                    break
+            else:
+                consecutive_refusals = 0
             if not content:
                 # Try CDN fallback for critical jQuery files if Wayback fails
                 if "jquery.min.js" in url.lower() and "cdn" not in url.lower():
@@ -2603,7 +2655,7 @@ class WaybackDownloader:
                 print(f"Error processing {url}: {e}")
                 continue
 
-        if files_downloaded == 0:
+        if files_downloaded == 0 and not stop_reason:
             # The start page failed, so nothing else was found. Say so rather
             # than report an empty archive as complete.
             raise RuntimeError(
@@ -2611,7 +2663,7 @@ class WaybackDownloader:
             )
 
         print(f"\n{'='*70}", flush=True)
-        print(f"Download Complete!", flush=True)
+        print(f"Download stopped early" if stop_reason else f"Download Complete!", flush=True)
         print(f"{'='*70}", flush=True)
         print(f"Output directory: {self.config.output_dir}", flush=True)
         print(f"Files successfully downloaded: {files_downloaded}", flush=True)
@@ -2621,4 +2673,6 @@ class WaybackDownloader:
             print(f"Corrupted fonts detected and removed: {len(self.corrupted_fonts)}", flush=True)
         print(f"Total files processed: {len(self.config.visited_urls)}", flush=True)
         print(f"{'='*70}\n", flush=True)
+        if stop_reason:
+            raise RuntimeError(stop_reason)
 

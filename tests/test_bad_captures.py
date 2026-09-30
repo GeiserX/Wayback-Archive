@@ -6,8 +6,10 @@ Each used to cost a pile of blind requests, a silently empty archive with
 exit code 0, or an interrupt that was swallowed.
 """
 
+import http.server
 import json
 import os
+import threading
 
 import pytest
 import requests
@@ -319,3 +321,109 @@ class TestExitStatus:
         assert err.startswith("Error: WAYBACK_URL") and err.count("\n") == 1
         assert "https://web.archive.org/web/<timestamp>/<url>" in err
         assert recorder.calls == []
+
+
+class _Sequence(http.server.BaseHTTPRequestHandler):
+    """Answers each GET with the next (status, headers) from the server's list."""
+
+    def do_GET(self):
+        status, headers = self.server.answers.pop(0)
+        self.server.hits += 1
+        self.send_response(status)
+        for name, value in headers.items():
+            self.send_header(name, value)
+        self.send_header("Content-Length", "2")
+        self.end_headers()
+        self.wfile.write(b"ok")
+
+    def log_message(self, *args):
+        pass
+
+
+@pytest.fixture
+def local_server():
+    """A server on 127.0.0.1 (no real network) driven by a list of answers."""
+    server = http.server.HTTPServer(("127.0.0.1", 0), _Sequence)
+    server.answers, server.hits = [], 0
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield server
+    server.shutdown()
+    server.server_close()
+
+
+class TestThrottling:
+    def _session_on(self, server):
+        """The downloader's session with its Wayback adapter pointed at server,
+        without the backoff sleeps between retries."""
+        dl = _make_downloader()
+        base = f"http://127.0.0.1:{server.server_port}/"
+        adapter = dl.session.get_adapter("https://web.archive.org/web/")
+        adapter.max_retries = adapter.max_retries.new(backoff_factor=0)
+        dl.session.mount(base, adapter)
+        return dl.session, base
+
+    def test_429_is_retried_after_retry_after(self, local_server):
+        local_server.answers = [(429, {"Retry-After": "0"}), (429, {"Retry-After": "0"}), (200, {})]
+        session, base = self._session_on(local_server)
+        response = session.get(base + "x", timeout=5)
+        assert response.status_code == 200
+        assert local_server.hits == 3
+
+    def test_5xx_is_not_retried(self, local_server):
+        local_server.answers = [(503, {}), (200, {})]
+        session, base = self._session_on(local_server)
+        assert session.get(base + "x", timeout=5).status_code == 503
+        assert local_server.hits == 1
+
+    def test_retries_are_bounded(self, local_server):
+        local_server.answers = [(429, {"Retry-After": "0"})] * 10
+        session, base = self._session_on(local_server)
+        assert session.get(base + "x", timeout=5).status_code == 429
+        assert local_server.hits <= 4
+
+    def test_a_long_retry_after_is_capped(self):
+        dl = _make_downloader()
+        retry = dl.session.get_adapter("https://web.archive.org/web/").max_retries
+        assert 0 < retry.get_retry_after(_Response(429, headers={"Retry-After": "3600"})) <= 60
+
+    def test_only_wayback_gets_the_retrying_adapter(self):
+        dl = _make_downloader()
+        assert dl.session.get_adapter("https://code.jquery.com/x").max_retries.total == 0
+
+    @pytest.mark.parametrize("refusal", ["429", "connection"])
+    def test_five_refusals_in_a_row_stop_the_run(self, tmp_path, refusal):
+        links = "".join(f'<a href="/p{n}.html">p{n}</a>' for n in range(10))
+        start = f"<!DOCTYPE html><html><body>{links}</body></html>".encode()
+        dl = _make_downloader(output_dir=tmp_path / "out")
+
+        def handler(url, kwargs):
+            if url.endswith("/http://example.com/"):
+                return _Response(200, start)
+            if refusal == "429":
+                return _Response(429, b"slow down")
+            raise requests.exceptions.ConnectionError("reset")
+
+        dl.session.get = _Recorder(handler)
+        with pytest.raises(RuntimeError, match="refused 5 requests in a row"):
+            dl.download()
+        pages = {url.rsplit("/", 1)[-1] for url, _ in dl.session.get.calls if "/p" in url}
+        assert len(pages) == 5
+        assert len(dl.session.get.calls) <= 1 + 5 * 2
+        assert (tmp_path / "out" / "index.html").exists()
+
+    def test_a_success_resets_the_count(self, tmp_path):
+        """Four refusals, a success, four more: the run goes on to the end."""
+        links = "".join(f'<a href="/p{n}.html">p{n}</a>' for n in range(9))
+        start = f"<!DOCTYPE html><html><body>{links}</body></html>".encode()
+        dl = _make_downloader(output_dir=tmp_path / "out")
+
+        def handler(url, kwargs):
+            if url.endswith("/http://example.com/") or "/p4.html" in url:
+                return _Response(200, start)
+            return _Response(429, b"slow down")
+
+        dl.session.get = _Recorder(handler)
+        dl.download()
+        pages = {url.rsplit("/", 1)[-1] for url, _ in dl.session.get.calls if "/p" in url}
+        assert len(pages) == 9
