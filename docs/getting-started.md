@@ -22,10 +22,10 @@ Homebrew Python and the system Python on Debian and Ubuntu refuse a bare `pip in
 Then give it one Wayback Machine URL:
 
 ```bash
-WAYBACK_URL="https://web.archive.org/web/20070405072310/http://www.python.org/" MAX_FILES=50 wayback-archive
+WAYBACK_URL="https://web.archive.org/web/20051231235226/http://www.python.org/" MAX_FILES=50 wayback-archive
 ```
 
-The copy lands in `./output` (set `OUTPUT_DIR` to change it). `MAX_FILES` keeps the first try short. The crawl fetches files in the order it finds them, so a short run can stop before a stylesheet that another stylesheet imports; drop `MAX_FILES` to fetch the whole site. Every setting is in [Configuration](configuration.md); per-shell examples are in [Usage](usage.md).
+The copy lands in `./output` (set `OUTPUT_DIR` to change it). `MAX_FILES=50` keeps the first try to about a minute, and on this snapshot the homepage, its stylesheet and its images are all within those 50 files, so the copy opens styled. Drop `MAX_FILES` to fetch the whole site. On another site a short run can stop before a stylesheet that is only reached through `@import`, because the crawl fetches files in the order it finds them. Every setting is in [Configuration](configuration.md); per-shell examples are in [Usage](usage.md).
 
 ## What a finished run looks like
 
@@ -36,14 +36,14 @@ Each file prints a numbered line while it downloads. The run ends with a block l
 Download Complete!
 ======================================================================
 Output directory: ./output
-Files successfully downloaded: 46
-Files failed: 4
+Files successfully downloaded: 50
+Files failed: 0
 Files skipped (duplicates): 0
 Total files processed: 50
 ======================================================================
 ```
 
-`Files failed` counts pages and files the archive does not have at that timestamp or any nearby one; their links stay broken in the copy.
+`Files failed` (none here) counts pages and files the archive does not have at that timestamp or any nearby one; their links stay broken in the copy.
 
 Open the copy straight from disk:
 
@@ -67,7 +67,7 @@ source venv/bin/activate  # macOS/Linux
 # venv\Scripts\activate   # Windows
 
 pip install -r config/requirements.txt
-WAYBACK_URL="https://web.archive.org/web/20070405072310/http://www.python.org/" python3 -m wayback_archive.cli
+WAYBACK_URL="https://web.archive.org/web/20051231235226/http://www.python.org/" python3 -m wayback_archive.cli
 ```
 
 To get the `wayback-archive` command from a checkout, install it in editable mode with `pip install -e .`.

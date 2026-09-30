@@ -51,9 +51,9 @@ hide:
 
 ## The result
 
-A snapshot of python.org from April 2007, rescued with one command and opened from the copy. No Wayback toolbar, no `web.archive.org` in the links, the stylesheet and images served from the folder on disk.
+A snapshot of python.org from 31 December 2005, rescued with the quick-start command (`MAX_FILES=50`) and opened from the copy. No Wayback toolbar, no `web.archive.org` in the links, the stylesheet and images served from the folder on disk.
 
-![The rescued python.org homepage of 5 April 2007, opened from the local copy: the original layout, stylesheet and images, with no Wayback Machine toolbar](images/screenshots/restored.png)
+![The rescued python.org homepage of 31 December 2005, opened from the local copy: the original layout, stylesheet and images, with no Wayback Machine toolbar](images/screenshots/restored.png)
 
 <div class="wa-gallery" markdown>
 <figure markdown>
@@ -69,7 +69,7 @@ A snapshot of python.org from April 2007, rescued with one command and opened fr
 <figcaption>The run, and what success looks like</figcaption>
 </figure>
 <figure markdown>
-![The output folder listed two levels deep: index.html next to the folders that hold the site's pages, stylesheets and images](images/screenshots/output-tree.png)
+![The output folder listed one level deep: index.html next to the folders that hold the site's pages, stylesheets and images](images/screenshots/output-tree.png)
 <figcaption>The folder you get</figcaption>
 </figure>
 </div>
@@ -108,7 +108,7 @@ flowchart LR
 4. A 404 from the archive is retried at up to three other timestamps. A file still missing is fetched live only when it is hosted on Google Fonts, `code.jquery.com` or the Squarespace CDN; anything else is counted as failed.
 5. When the queue is empty the run prints a `Download Complete!` block with the files downloaded, failed and skipped.
 
-`MAX_FILES` stops the crawl after trying that many files, failed ones included, which is the way to try a big site without waiting for all of it. The crawl fetches files in the order it finds them, so a short run can miss a stylesheet the full run saves. There are no command-line flags: `wayback-archive --help` prints `Error: WAYBACK_URL environment variable is required`. Settings come from the environment or a `.env` file in the working directory. See [How it works](how-it-works.md) for the steps in detail and [Configuration](configuration.md) for every variable.
+`MAX_FILES` stops the crawl after trying that many files, failed ones included, which is the way to try a big site without waiting for all of it. The crawl fetches files in the order it finds them, so on a site whose stylesheet is only reached through `@import` a short run can stop before it; the quick start's snapshot links its stylesheet directly and has it within the first 50 files. There are no command-line flags: `wayback-archive --help` prints `Error: WAYBACK_URL environment variable is required`. Settings come from the environment or a `.env` file in the working directory. See [How it works](how-it-works.md) for the steps in detail and [Configuration](configuration.md) for every variable.
 
 ## What it does not do
 

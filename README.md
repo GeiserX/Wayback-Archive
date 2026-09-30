@@ -19,7 +19,7 @@
 Wayback-Archive is a command-line tool that downloads an archived website from the [Wayback Machine](https://web.archive.org/) and rebuilds it as a folder you can open offline. It fetches every page and asset it can find in the snapshot, rewrites the links to local paths and removes the Wayback Machine's own toolbar, scripts and URL prefixes, so the copy looks like the site did on that day. `wget --mirror` and `httrack` do not understand Wayback Machine URLs; this does.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/GeiserX/Wayback-Archive/main/docs/images/screenshots/restored.png" alt="The python.org homepage of 5 April 2007, rescued and opened from the local copy: original layout, stylesheet and images, no Wayback Machine toolbar" width="900"/>
+  <img src="https://raw.githubusercontent.com/GeiserX/Wayback-Archive/main/docs/images/screenshots/restored.png" alt="The python.org homepage of 31 December 2005, rescued and opened from the local copy: original layout, stylesheet and images, no Wayback Machine toolbar" width="900"/>
 </p>
 
 ## Features
@@ -38,11 +38,11 @@ Wayback-Archive is a command-line tool that downloads an archived website from t
 
 ```bash
 pipx install wayback-archive
-WAYBACK_URL="https://web.archive.org/web/20070405072310/http://www.python.org/" MAX_FILES=50 wayback-archive
+WAYBACK_URL="https://web.archive.org/web/20051231235226/http://www.python.org/" MAX_FILES=50 wayback-archive
 open output/index.html                     # Linux: xdg-open output/index.html
 ```
 
-Needs Python 3.10 or newer (on 3.9, pip stops with `ResolutionImpossible`); `pip install` works too, and the other install paths are in [Getting started](https://geiserx.github.io/Wayback-Archive/getting-started/). The run ends with a `Download Complete!` block counting the files downloaded, failed and skipped; the copy opens straight from disk. `MAX_FILES` keeps the first try short, and since the crawl fetches files in the order it finds them, a short run can stop before a stylesheet the full run saves; drop it to fetch the whole site. There are no flags: every setting is an environment variable, listed in [Configuration](https://geiserx.github.io/Wayback-Archive/configuration/).
+Needs Python 3.10 or newer (on 3.9, pip stops with `ResolutionImpossible`); `pip install` works too, and the other install paths are in [Getting started](https://geiserx.github.io/Wayback-Archive/getting-started/). That run takes about a minute, ends with a `Download Complete!` block counting the files downloaded, failed and skipped, and opens from disk as the page above: the homepage, its stylesheet and its images are all within the first 50 files. Drop `MAX_FILES` to fetch the whole site. On another site a short run can stop before a stylesheet that is only reached through `@import`, because the crawl fetches files in the order it finds them. There are no flags: every setting is an environment variable, listed in [Configuration](https://geiserx.github.io/Wayback-Archive/configuration/).
 
 ## Documentation
 
