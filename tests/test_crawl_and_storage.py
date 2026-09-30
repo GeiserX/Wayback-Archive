@@ -87,6 +87,54 @@ def _hrefs(html):
     return re.findall(r'(?:href|src)="?([^"\s>]+)', html)
 
 
+class TestTextIsDecodedNotDropped:
+    """E2E-3, html-processing-2, download-loop-004."""
+
+    def _saved(self, tmp_path, body, content_type=None, name="index.html", pages=None):
+        pages = dict(pages or {})
+        pages.setdefault("https://example.com/", (body, content_type))
+        _, _, _, output_dir = _run(tmp_path, pages)
+        return (output_dir / name).read_text(encoding="utf-8")
+
+    def test_latin1_page_with_meta(self, tmp_path):
+        body = (
+            '<html><head><meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">'
+            "<title>España</title></head><body><p>Sábado, año</p></body></html>"
+        ).encode("latin-1")
+        html = self._saved(tmp_path, body)
+        assert "España" in html and "Sábado, año" in html
+        assert re.search(r"charset=utf-8", html, re.I)
+        assert "iso-8859-1" not in html.lower()
+
+    def test_cp1252_page_without_any_declaration(self, tmp_path):
+        body = "<html><body><p>Café, Año nuevo. Prix: 5€</p></body></html>".encode("cp1252")
+        html = self._saved(tmp_path, body)
+        assert "Café, Año nuevo. Prix: 5€" in html
+
+    def test_shift_jis_page_with_meta(self, tmp_path):
+        body = '<html><head><meta charset="Shift_JIS"></head><body>日本語のページ</body></html>'.encode("shift_jis")
+        assert "日本語のページ" in self._saved(tmp_path, body)
+
+    def test_http_charset_wins(self, tmp_path):
+        body = "<html><body>日本語のページ</body></html>".encode("shift_jis")
+        html = self._saved(tmp_path, body, content_type="text/html; charset=Shift_JIS")
+        assert "日本語のページ" in html
+
+    def test_undeclared_utf8_stays_intact(self, tmp_path):
+        body = "<html><body>Año 日本</body></html>".encode("utf-8")
+        assert "Año 日本" in self._saved(tmp_path, body)
+
+    def test_latin1_stylesheet(self, tmp_path):
+        page = b'<html><head><link rel="stylesheet" href="https://example.com/s.css"></head><body></body></html>'
+        css = '@charset "iso-8859-1"; a:after{content:"Sábado"}'.encode("latin-1")
+        saved = self._saved(
+            tmp_path, page, name="s.css", pages={"https://example.com/s.css": css}
+        )
+        assert "Sábado" in saved
+        # Saved as UTF-8, so the declaration must say so.
+        assert '@charset "utf-8"' in saved and "iso-8859-1" not in saved
+
+
 class TestHtmlIsNotSavedAsAnAsset:
     """E2E-4: Wayback answers some asset requests with its own HTML page."""
 

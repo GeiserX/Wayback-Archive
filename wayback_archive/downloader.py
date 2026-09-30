@@ -1,5 +1,6 @@
 """Core downloader module for Wayback-Archive."""
 
+import codecs
 import os
 import posixpath
 import re
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import Optional, Set, Dict, List, Tuple
 import requests
 from bs4 import BeautifulSoup, Comment
+from bs4.dammit import EncodingDetector
 from wayback_archive.config import Config
 
 
@@ -123,6 +125,8 @@ class WaybackDownloader:
         # The same answer keyed by the file finally written, so the download
         # loop can tell a stylesheet from a page when the URL cannot.
         self._kind_by_path: Dict[str, str] = {}
+        # Charset named by the last response download_file read.
+        self._last_charset: Optional[str] = None
         self._parse_wayback_url()
 
     def _parse_wayback_url(self):
@@ -739,6 +743,7 @@ class WaybackDownloader:
         If all Wayback attempts fail and the URL is on a well-known CDN
         (LIVE_FALLBACK_HOSTS), tries that CDN live.
         """
+        self._last_charset = None
         # Determine if this is an HTML page (we should NOT fallback to live for HTML)
         parsed = urlparse(url)
         path_lower = parsed.path.lower()
@@ -760,7 +765,7 @@ class WaybackDownloader:
                     wayback_url_if, timeout=15, allow_redirects=True
                 )
                 response.raise_for_status()
-                content = response.content
+                content = self._body_of(response)
                 
                 # Verify it's actually HTML content, not an error page
                 content_start = content[:200].strip()
@@ -768,7 +773,7 @@ class WaybackDownloader:
                     # The if_ version still has Wayback scripts but also contains the actual page
                     # Check if it has actual page content (not just the wrapper interface)
                     try:
-                        html_str = content.decode("utf-8", errors="ignore")[:5000]
+                        html_str = content.decode("utf-8", errors="replace")[:5000]
                         # Check if it's ONLY the wrapper (has Wayback Machine title AND no actual page content)
                         # The if_ version will have both Wayback scripts AND the actual page content
                         is_only_wrapper = (
@@ -794,7 +799,7 @@ class WaybackDownloader:
                 wayback_url, timeout=15, allow_redirects=True
             )
             response.raise_for_status()
-            content = response.content
+            content = self._body_of(response)
             
             # Check if font file is corrupted (HTML error page)
             if self._is_corrupted_font(content, url):
@@ -823,7 +828,7 @@ class WaybackDownloader:
                                     variant_url, timeout=10, allow_redirects=True
                                 )
                                 if variant_response.status_code == 200:
-                                    content = variant_response.content
+                                    content = self._body_of(variant_response)
                                     # The if_ version should have the actual page content
                                     # (it may still have Wayback scripts but that's fine)
                                     # Check if font file is corrupted
@@ -839,7 +844,7 @@ class WaybackDownloader:
                                     variant_url, timeout=10, allow_redirects=True
                                 )
                                 if variant_response.status_code == 200:
-                                    content = variant_response.content
+                                    content = self._body_of(variant_response)
                                     # Check if font file is corrupted
                                     if self._is_corrupted_font(content, url):
                                         normalized_url = self._normalize_url(url, self.config.base_url)
@@ -862,6 +867,53 @@ class WaybackDownloader:
             pass
         
         return None
+
+    def _body_of(self, response) -> bytes:
+        """The response body, remembering the charset its Content-Type named."""
+        content_type = str(getattr(response, "headers", {}).get("Content-Type") or "")
+        match = re.search(r"charset\s*=\s*[\"']?([\w.:-]+)", content_type, re.IGNORECASE)
+        self._last_charset = match.group(1) if match else None
+        return response.content
+
+    def _decode_text(self, content: bytes, charset: Optional[str] = None, is_html: bool = False) -> str:
+        """
+        Decode a page, stylesheet or script without dropping characters.
+
+        Tries, in order: a byte order mark, the charset the HTTP response
+        named, the document's own declaration (<meta charset>, @charset),
+        UTF-8, then windows-1252 with replacement characters. Old European
+        sites are mostly ISO-8859-1 and used to lose every accented letter.
+
+        Args:
+            content: The raw bytes.
+            charset: The charset from the response's Content-Type, if any.
+            is_html: Look for a <meta> declaration rather than @charset.
+        """
+        data, bom_encoding = EncodingDetector.strip_byte_order_mark(content)
+        if is_html:
+            declared = EncodingDetector.find_declared_encoding(data, is_html=True)
+        else:
+            match = re.match(rb"\s*@charset\s+[\"']([\w.:-]+)[\"']", data, re.IGNORECASE)
+            declared = match.group(1).decode("ascii") if match else None
+
+        for candidate in (bom_encoding, charset, declared, "utf-8", "cp1252"):
+            if not candidate:
+                continue
+            try:
+                name = codecs.lookup(candidate).name
+            except LookupError:
+                continue
+            # As browsers do: latin-1 and ascii labels mean windows-1252, and
+            # a UTF-16 label without a byte order mark means UTF-8.
+            if name in ("latin-1", "iso8859-1", "ascii"):
+                name = "cp1252"
+            elif name.startswith(("utf-16", "utf-32")) and candidate != bom_encoding:
+                name = "utf-8"
+            try:
+                return data.decode(name)
+            except UnicodeDecodeError:
+                continue
+        return data.decode("cp1252", errors="replace")
 
     # Extensions of files that are never an HTML document.
     ASSET_EXTENSIONS = frozenset({
@@ -899,7 +951,7 @@ class WaybackDownloader:
             live_response = self.session.get(url, timeout=10, allow_redirects=False)
             if live_response.status_code != 200:
                 return None
-            content = live_response.content
+            content = self._body_of(live_response)
         except Exception:
             return None
 
@@ -2145,6 +2197,7 @@ class WaybackDownloader:
                 files_failed += 1
                 print(f"         ⚠️  Failed: got an HTML page instead of the file", flush=True)
                 continue
+            charset = self._last_charset
             
             # Show file size
             size_kb = len(content) / 1024
@@ -2255,16 +2308,9 @@ class WaybackDownloader:
                     # Process HTML
                     try:
                         print(f"         Processing HTML and extracting links...", flush=True)
-                        # Try to decode as UTF-8, fallback to latin-1 or detect encoding
-                        try:
-                            html = content.decode("utf-8", errors="strict")
-                        except UnicodeDecodeError:
-                            try:
-                                html = content.decode("utf-8", errors="ignore")
-                            except Exception:
-                                # Last resort: try latin-1 which can decode any byte sequence
-                                html = content.decode("latin-1", errors="ignore")
-                        
+                        # Saved as UTF-8; bs4 rewrites the <meta charset> to match.
+                        html = self._decode_text(content, charset, is_html=True)
+
                         processed_html, new_links = self._process_html(html, url)
                         if new_links:
                             print(f"         Found {len(new_links)} new links to download", flush=True)
@@ -2308,11 +2354,16 @@ class WaybackDownloader:
                                 queue.append(link_url)
 
                 elif content_type == "text/css":
-                    # Process CSS
-                    try:
-                        css = content.decode("utf-8", errors="ignore")
-                    except Exception:
-                        css = content.decode("latin-1", errors="ignore")
+                    # Process CSS. It is saved as UTF-8, so its @charset has
+                    # to say so or the browser decodes it the old way.
+                    css = re.sub(
+                        r'^\s*@charset\s+["\'][^"\']*["\']\s*;',
+                        '@charset "utf-8";',
+                        self._decode_text(content, charset),
+                        count=1,
+                        flags=re.IGNORECASE,
+                    )
+                    original_css = css
                     
                     try:
                         print(f"         Processing CSS and extracting resources...", flush=True)
@@ -2371,7 +2422,7 @@ class WaybackDownloader:
                     except Exception as e:
                         print(f"Warning: Error processing CSS for {url}: {e}")
                         # Use original content if processing fails
-                        css = content.decode("utf-8", errors="ignore")
+                        css = original_css
 
                     try:
                         with open(local_path, "w", encoding="utf-8", errors="replace") as f:
@@ -2383,7 +2434,7 @@ class WaybackDownloader:
 
                 elif content_type in ("application/javascript", "text/javascript"):
                     # Process JavaScript
-                    js = content.decode("utf-8", errors="ignore")
+                    js = self._decode_text(content, charset)
                     
                     print(f"         Processing JavaScript and extracting URLs...", flush=True)
                     # Extract URLs from JavaScript (may contain fetch, XMLHttpRequest, etc.)
