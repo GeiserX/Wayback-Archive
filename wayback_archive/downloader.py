@@ -946,6 +946,16 @@ class WaybackDownloader:
                 continue
         return data.decode("cp1252", errors="replace")
 
+    @staticmethod
+    def _looks_like_markup(content: bytes) -> bool:
+        """True when a body reads as HTML: text that opens with a tag, or
+        names <html>, <head> or <body> near its start."""
+        head = content[:1024]
+        if b"\x00" in head:
+            return False
+        start = head.lstrip(b"\xef\xbb\xbf \t\r\n")
+        return start.startswith(b"<") or re.search(rb"<(html|head|body)\b", head, re.I) is not None
+
     # Extensions of files that are never an HTML document.
     ASSET_EXTENSIONS = frozenset({
         ".jpg", ".jpeg", ".png", ".gif", ".svg", ".webp", ".ico", ".bmp", ".tiff",
@@ -2339,10 +2349,19 @@ class WaybackDownloader:
                 is_google_fonts_css = self._is_google_fonts_css(url)
                 
                 # Process based on content type - be more conservative about what we treat as HTML
+                # A script can answer with a PDF, JSON or CSV, so a server-side
+                # URL is a page only when its body is markup.
                 is_html = (
                     not is_google_fonts_css and (
                         content_type == "text/html" or
-                        (not content_type and self._is_html_url(url, parsed))
+                        (
+                            not content_type
+                            and self._is_html_url(url, parsed)
+                            and (
+                                os.path.splitext(parsed.path.lower())[1] not in self.PAGE_EXTENSIONS
+                                or self._looks_like_markup(content)
+                            )
+                        )
                     )
                 )
                 

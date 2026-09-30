@@ -261,6 +261,25 @@ class TestServerSidePages:
         # The .pl page was processed as HTML, so its link was rewritten.
         assert "index.php.html" in (output_dir / "later.pl.html").read_text()
 
+    def test_non_html_answers_are_saved_as_is(self, tmp_path):
+        # A script can answer with a PDF, JSON, CSV or its own source; only
+        # markup is a page, anything else is kept byte for byte.
+        answers = {
+            "download.php": b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n1 0 obj << /Type /Catalog >> endobj\n\x00\xff",
+            "api.php": b'{"a": "<b>x</b>", "n": 1}',
+            "export.cgi": b"name;value\nA;1\n",
+            "src/tool.pl": b"#!/usr/bin/perl\nprint 1 if $a < $b;\n",
+        }
+        page = "<html><body>" + "".join(
+            f'<a href="https://example.com/{name}">x</a>' for name in answers
+        ) + "</body></html>"
+        pages = {"https://example.com/": page.encode()}
+        pages.update({"https://example.com/" + name: body for name, body in answers.items()})
+        _, _, out, output_dir = _run(tmp_path, pages)
+        for name, body in answers.items():
+            assert (output_dir / (name + ".html")).read_bytes() == body, name
+        assert "Files failed: 0" in out
+
 
 class TestOneBadPathFailsOneFile:
     """security-5: an OSError on one file must not end the run."""
@@ -284,7 +303,6 @@ class TestOneBadPathFailsOneFile:
         dl, files, out, _ = _run(tmp_path, pages)
         assert "logo.png" in files
         assert "Files failed: 1" in out
-
 
 class TestTextIsDecodedNotDropped:
     """E2E-3, html-processing-2, download-loop-004."""
