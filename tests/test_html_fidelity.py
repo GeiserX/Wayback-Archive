@@ -315,6 +315,48 @@ class TestBaseHref:
         soup, _ = _process(dl, f'<html><head><base href="{W}/https://site.com/"></head><body></body></html>')
         assert soup.base is None
 
+    def test_every_relative_reference_follows_the_base(self):
+        dl = _make_dl()
+        soup, links = _process(dl, (
+            f'<html><head><base href="{W}/https://site.com/"><style>a{{background:url(img/s.png)}}</style></head><body>'
+            '<div style="background:url(img/bg.png)"></div><form action="search"></form>'
+            '<video poster="p.jpg"><source src="v.mp4"></video><img data-src="img/lazy.jpg">'
+            '<map><area href="about.html"></map><object data="f.swf"></object><input src="b.png" type="image">'
+            '<table background="img/t.gif"></table>'
+            '</body></html>'
+        ), page="https://site.com/blog/post")
+        assert soup.div["style"] == "background:url(../img/bg.png)"
+        assert soup.style.string == "a{background:url(../img/s.png)}"
+        assert soup.form["action"] == "../search.html"
+        assert soup.video["poster"] == "../p.jpg"
+        assert soup.source["src"] == "../v.mp4"
+        assert soup.img["data-src"] == "../img/lazy.jpg"
+        assert soup.area["href"] == "../about.html"
+        assert soup.object["data"] == "../f.swf"
+        assert soup.input["src"] == "../b.png"
+        assert soup.table["background"] == "../img/t.gif"
+        for name in ("img/bg.png", "img/s.png", "p.jpg", "v.mp4", "img/lazy.jpg", "f.swf", "b.png", "img/t.gif"):
+            assert f"https://site.com/{name}" in links, name
+
+    def test_base_on_another_host_gives_it_no_local_paths(self):
+        dl = _make_dl()
+        soup, links = _process(dl, (
+            '<html><head><base href="https://shop.other.com/x/"></head><body>'
+            '<a href="cart.html">c</a><img src="logo.png"><video poster="p.jpg"></video>'
+            f'<a href="{W}/https://site.com/about">a</a>'
+            '<video poster="https://site.com/p2.jpg"></video>'
+            '</body></html>'
+        ), page="https://site.com/blog/post")
+        assert soup.base is None
+        assert soup.find("a", string="c") is None or soup.find("a", string="c")["href"] == "https://shop.other.com/x/cart.html"
+        assert soup.img["src"] == "https://shop.other.com/x/logo.png"
+        posters = [v["poster"] for v in soup.find_all("video")]
+        assert posters == ["https://shop.other.com/x/p.jpg", "../p2.jpg"]
+        assert soup.find("a", string="a")["href"] == "../about.html"
+        assert not any("other.com" in link for link in links)
+        assert "https://site.com/about" in links
+        assert "https://site.com/p2.jpg" in links
+
 
 class TestSvgUseSprites:
     """<use> pointing into a sprite file keeps the file; one pointing into

@@ -1621,6 +1621,47 @@ class WaybackDownloader:
                 srcset_parts.append(f"{relative_path}{descriptor}")
         return ", ".join(srcset_parts)
 
+    # Attributes holding one URL that a <base href> re-bases.
+    _BASE_RELATIVE_ATTRS = ("href", "src", "poster", "data", "action", "background", "data-src")
+    _HAS_SCHEME = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*:")
+
+    def _resolve_against_base(self, soup: BeautifulSoup, base_url: str) -> None:
+        """
+        Make the page-relative references of a page with <base href> absolute.
+
+        Once the base is dropped, a reference the passes in _process_html
+        leave as written (url(img/bg.png), <video poster>, <form action>)
+        would resolve against the page's own file instead. Absolute, every
+        pass treats it like any other URL: a local path when it is on the
+        site, the base's host when it is not.
+        """
+        def resolve(value: str) -> str:
+            value = value.strip()
+            if (
+                not value
+                or value.startswith(("/", "#"))
+                or self._HAS_SCHEME.match(value)
+                or not self._SINGLE_URL.fullmatch(value)
+            ):
+                return value
+            return urljoin(base_url, value)
+
+        css_url = re.compile(r'url\s*\(\s*(["\']?)((?:[^"\'()]|\([^"\'()]*\))+)\1\s*\)', re.IGNORECASE)
+
+        def resolve_css(css: str) -> str:
+            return css_url.sub(lambda m: f"url({m.group(1)}{resolve(m.group(2))}{m.group(1)})", css)
+
+        for element in soup.find_all(True):
+            for attr_name in self._BASE_RELATIVE_ATTRS:
+                value = element.get(attr_name)
+                if isinstance(value, str):
+                    element[attr_name] = resolve(value)
+            if isinstance(element.get("style"), str):
+                element["style"] = resolve_css(element["style"])
+        for style_tag in soup.find_all("style"):
+            if style_tag.string:
+                style_tag.string = resolve_css(style_tag.string)
+
     def _process_html(self, html: str, base_url: str) -> tuple[str, List[str]]:
         """Process HTML content and extract links."""
         self._current_page_url = base_url
@@ -1636,6 +1677,7 @@ class WaybackDownloader:
             del base_tag["href"]
             if not base_tag.attrs:
                 base_tag.decompose()
+            self._resolve_against_base(soup, base_url)
 
         # Remove Wayback Machine banner, scripts, and styles
         elements_to_remove = []
@@ -2337,8 +2379,9 @@ class WaybackDownloader:
 
         # Convert any remaining domain references in text content and attributes to relative paths
         # This handles cases where domain URLs appear in href, src, or other attributes
-        parsed_base = urlparse(base_url)
-        base_domain = parsed_base.netloc.lower().removeprefix("www.")
+        # The page's host, not the <base> one: a base on another host would
+        # otherwise stop this pass from seeing the site's own URLs.
+        base_domain = urlparse(self._current_page_url).netloc.lower().removeprefix("www.")
         
         for element in soup.find_all(True):  # All elements
             for attr_name, attr_value in list(element.attrs.items()):
