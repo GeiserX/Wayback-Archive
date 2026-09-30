@@ -6,6 +6,7 @@ Each used to cost a pile of blind requests, a silently empty archive with
 exit code 0, or an interrupt that was swallowed.
 """
 
+import json
 import os
 
 import pytest
@@ -42,6 +43,9 @@ class _Response:
     def raise_for_status(self):
         if self.status_code >= 400:
             raise requests.exceptions.HTTPError(response=self)
+
+    def json(self):
+        return json.loads(self.content)
 
 
 class _Recorder:
@@ -114,3 +118,165 @@ class TestMissingUrl:
 
         dl.session.get = _Recorder(handler)
         assert dl.download_file("http://example.com/logo.png") == b"PNGDATA"
+
+
+CDX = "https://web.archive.org/cdx/search/cdx"
+ARCHIVED = {"memento-datetime": "Wed, 01 Jan 2020 00:00:00 GMT"}
+CHALLENGE = (
+    b"<!DOCTYPE html><html><head><title>Just a moment...</title></head>"
+    b"<body><script src='/cdn-cgi/challenge-platform/h/b/orchestrate/jsch/v1'></script></body></html>"
+)
+GOOD_PAGE = b"<!DOCTYPE html><html><head><title>Home</title></head><body>Hello</body></html>"
+
+
+def _cdx_rows(*timestamps):
+    return _Response(200, json.dumps([["timestamp"]] + [[ts] for ts in timestamps]).encode())
+
+
+class _BadCaptureWayback:
+    """The capture at TS is bad; CDX answers with cdx(); any other timestamp is good."""
+
+    def __init__(self, bad, cdx, good=GOOD_PAGE):
+        self.bad = bad
+        self.cdx = cdx
+        self.good = good
+
+    def __call__(self, url, kwargs):
+        if url == CDX:
+            return self.cdx(kwargs)
+        if f"/{TS}" in url:
+            return self.bad
+        return _Response(200, self.good, url=url)
+
+
+def _cdx_calls(dl):
+    return [kwargs for url, kwargs in dl.session.get.calls if url == CDX]
+
+
+class TestBadCapture:
+    """Issue #48: an archived error or a Cloudflare challenge is replaced by
+    the nearest capture with status 200, found with one CDX query."""
+
+    def test_archived_403_falls_back_to_the_nearest_good_capture(self):
+        dl = _make_downloader()
+        dl.session.get = _Recorder(_BadCaptureWayback(
+            _Response(403, CHALLENGE, headers=ARCHIVED),
+            lambda kwargs: _cdx_rows("20191231230000"),
+        ))
+        assert dl.download_file("http://example.com/about") == GOOD_PAGE
+        cdx = _cdx_calls(dl)
+        assert len(cdx) == 1
+        params = cdx[0]["params"]
+        assert params["url"] == "http://example.com/about"
+        assert params["filter"] == "statuscode:200"
+        assert params["closest"] == TS
+        assert dl.session.get.calls[-1][0] == (
+            "https://web.archive.org/web/20191231230000if_/http://example.com/about"
+        )
+
+    def test_archived_500_asset_falls_back_too(self):
+        dl = _make_downloader()
+        dl.session.get = _Recorder(_BadCaptureWayback(
+            _Response(500, b"oops", headers=ARCHIVED),
+            lambda kwargs: _cdx_rows("20191231230000"),
+            good=b"PNGDATA",
+        ))
+        assert dl.download_file("http://example.com/logo.png") == b"PNGDATA"
+        assert dl.session.get.calls[-1][0] == (
+            "https://web.archive.org/web/20191231230000im_/http://example.com/logo.png"
+        )
+
+    def test_start_url_adopts_the_timestamp_actually_used(self):
+        dl = _make_downloader()
+        dl.session.get = _Recorder(_BadCaptureWayback(
+            _Response(503, CHALLENGE, headers=ARCHIVED),
+            lambda kwargs: _cdx_rows("20191231230000"),
+        ))
+        assert dl.download_file(dl.config.base_url) == GOOD_PAGE
+        assert dl.original_timestamp == "20191231230000"
+        assert dl.original_datetime.strftime("%Y%m%d%H%M%S") == "20191231230000"
+
+    def test_other_urls_keep_the_requested_timestamp(self):
+        dl = _make_downloader()
+        dl.session.get = _Recorder(_BadCaptureWayback(
+            _Response(503, CHALLENGE, headers=ARCHIVED),
+            lambda kwargs: _cdx_rows("20191231230000"),
+        ))
+        dl.download_file("http://example.com/about")
+        assert dl.original_timestamp == TS
+
+    def test_challenge_archived_as_200_falls_back(self):
+        dl = _make_downloader()
+        dl.session.get = _Recorder(_BadCaptureWayback(
+            _Response(200, CHALLENGE),
+            lambda kwargs: _cdx_rows("20191231230000"),
+        ))
+        assert dl.download_file("http://example.com/about") == GOOD_PAGE
+        assert len(_cdx_calls(dl)) == 1
+
+    def test_good_page_mentioning_challenge_platform_is_kept(self):
+        """Negative control: Cloudflare injects challenge-platform into normal pages."""
+        page = (
+            b"<!DOCTYPE html><html><head><title>nowSecure</title></head><body>Hi"
+            b"<script src='/cdn-cgi/challenge-platform/scripts/jsd/main.js'></script></body></html>"
+        )
+        dl = _make_downloader()
+        dl.session.get = _Recorder(lambda url, kwargs: _Response(200, page))
+        assert dl.download_file("http://example.com/about") == page
+        assert _cdx_calls(dl) == []
+
+    def test_wayback_own_503_is_not_a_bad_capture(self):
+        """Without memento-datetime the error is Wayback's, and CDX cannot help."""
+        dl = _make_downloader()
+        dl.session.get = _Recorder(lambda url, kwargs: _Response(503, b"Temporarily Offline"))
+        assert dl.download_file("http://example.com/about") is None
+        assert _cdx_calls(dl) == []
+
+    def test_no_good_capture_returns_none_after_one_lookup(self):
+        for rows in (b"[]", b'[["timestamp"]]'):
+            dl = _make_downloader()
+            dl.session.get = _Recorder(_BadCaptureWayback(
+                _Response(403, CHALLENGE, headers=ARCHIVED),
+                lambda kwargs: _Response(200, rows),
+            ))
+            assert dl.download_file("http://example.com/about") is None
+            assert len(_cdx_calls(dl)) == 1
+
+    def test_fallback_capture_also_bad_returns_none_with_one_lookup(self):
+        dl = _make_downloader()
+        bad = _Response(403, CHALLENGE, headers=ARCHIVED)
+        dl.session.get = _Recorder(lambda url, kwargs: _cdx_rows("20191231230000") if url == CDX else bad)
+        assert dl.download_file("http://example.com/about") is None
+        assert len(_cdx_calls(dl)) == 1
+        assert dl.original_timestamp == TS
+
+    def test_cdx_stops_after_three_consecutive_failures(self):
+        dl = _make_downloader()
+        dl.session.get = _Recorder(_BadCaptureWayback(
+            _Response(403, CHALLENGE, headers=ARCHIVED),
+            lambda kwargs: _Response(503, b"<html>Temporarily Offline</html>"),
+        ))
+        for n in range(5):
+            assert dl.download_file(f"http://example.com/p{n}") is None
+        assert len(_cdx_calls(dl)) == 3
+
+    def test_cdx_success_resets_the_failure_count(self):
+        answers = iter([_Response(503, b"x"), _Response(503, b"x"), _cdx_rows("20191231230000")] * 3)
+        dl = _make_downloader()
+        dl.session.get = _Recorder(_BadCaptureWayback(
+            _Response(403, CHALLENGE, headers=ARCHIVED),
+            lambda kwargs: next(answers),
+        ))
+        for n in range(9):
+            dl.download_file(f"http://example.com/p{n}")
+        assert len(_cdx_calls(dl)) == 9
+
+    def test_cdx_lookups_are_capped_per_run(self):
+        dl = _make_downloader()
+        dl.session.get = _Recorder(_BadCaptureWayback(
+            _Response(403, CHALLENGE, headers=ARCHIVED),
+            lambda kwargs: _Response(200, b"[]"),
+        ))
+        for n in range(30):
+            dl.download_file(f"http://example.com/p{n}")
+        assert len(_cdx_calls(dl)) == 25

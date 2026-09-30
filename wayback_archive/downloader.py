@@ -142,6 +142,10 @@ class WaybackDownloader:
         self._kind_by_path: Dict[str, str] = {}
         # Charset named by the last response download_file read.
         self._last_charset: Optional[str] = None
+        # CDX lookups for bad captures: how many this run, and how many
+        # failed in a row. CDX is slow and often down, so both are capped.
+        self._cdx_lookups = 0
+        self._cdx_failures = 0
         self._parse_wayback_url()
 
     def _parse_wayback_url(self):
@@ -739,6 +743,89 @@ class WaybackDownloader:
         )
         return list(dict.fromkeys(timestamps))
 
+    CDX_URL = "https://web.archive.org/cdx/search/cdx"
+    CDX_MAX_LOOKUPS = 25
+    CDX_MAX_CONSECUTIVE_FAILURES = 3
+    # Only the exact titles: Cloudflare injects challenge-platform scripts
+    # into normal pages too.
+    CHALLENGE_TITLES = (
+        b"<title>Just a moment...</title>",
+        b"<title>Attention Required! | Cloudflare</title>",
+    )
+
+    def _bad_capture_reason(self, response) -> Optional[str]:
+        """Why an archived answer is not the page, or None when it is.
+
+        Wayback replays an archived 403 or 5xx with that status and a
+        memento-datetime header; its own errors carry no such header, and a
+        404 has its own search.
+        """
+        status = response.status_code
+        if status >= 400 and status != 404 and response.headers.get("memento-datetime"):
+            return f"archived HTTP {status}"
+        if status == 200 and any(title in response.content[:16384] for title in self.CHALLENGE_TITLES):
+            return "Cloudflare challenge page"
+        return None
+
+    def _nearest_good_timestamp(self, url: str) -> Optional[str]:
+        """The timestamp of the capture of url with status 200 closest to the
+        requested one, from one CDX query; None when there is none or CDX
+        does not answer."""
+        if (
+            self._cdx_lookups >= self.CDX_MAX_LOOKUPS
+            or self._cdx_failures >= self.CDX_MAX_CONSECUTIVE_FAILURES
+        ):
+            return None
+        self._cdx_lookups += 1
+        try:
+            response = self.session.get(
+                self.CDX_URL,
+                params={
+                    "url": url,
+                    "output": "json",
+                    "fl": "timestamp",
+                    "filter": "statuscode:200",
+                    "closest": self.original_datetime.strftime('%Y%m%d%H%M%S'),
+                    "sort": "closest",
+                    "limit": "1",
+                },
+                timeout=30,
+            )
+            if response.status_code != 200:
+                raise ValueError(f"CDX answered HTTP {response.status_code}")
+            rows = response.json()
+        except Exception:
+            self._cdx_failures += 1
+            if self._cdx_failures == self.CDX_MAX_CONSECUTIVE_FAILURES:
+                print("         ⚠️  The Wayback CDX index is not answering; no more capture lookups this run", flush=True)
+            return None
+        self._cdx_failures = 0
+        if len(rows) > 1 and rows[1]:
+            return str(rows[1][0])
+        return None
+
+    def _fetch_nearest_good_capture(self, url: str, reason: str, is_html_page: bool) -> Optional[bytes]:
+        """Replace a bad capture of url with the nearest good one, if any."""
+        print(f"         ⚠️  Capture is {reason}; looking for the nearest good one", flush=True)
+        timestamp = self._nearest_good_timestamp(url)
+        if not timestamp:
+            print(f"         ⚠️  No good capture found", flush=True)
+            return None
+        fallback_url = self._convert_to_wayback_url_with_timestamp(url, timestamp, use_iframe=is_html_page)
+        try:
+            response = self.session.get(fallback_url, timeout=15, allow_redirects=True)
+        except Exception:
+            return None
+        if response.status_code != 200 or self._bad_capture_reason(response):
+            print(f"         ⚠️  The capture at {timestamp} is not usable either", flush=True)
+            return None
+        if url == self.config.base_url:
+            # Assets resolve around the capture actually used.
+            print(f"         Requested capture is {reason}; using nearest good capture {timestamp}", flush=True)
+            self.original_timestamp = timestamp
+            self.original_datetime = datetime.strptime(timestamp, '%Y%m%d%H%M%S')
+        return self._body_of(response)
+
     def _is_corrupted_font(self, content: bytes, url: str) -> bool:
         """Check if a downloaded font file is actually an HTML error page.
         
@@ -787,6 +874,9 @@ class WaybackDownloader:
                 response = self.session.get(
                     wayback_url_if, timeout=15, allow_redirects=True
                 )
+                reason = self._bad_capture_reason(response)
+                if reason:
+                    return self._fetch_nearest_good_capture(url, reason, is_html_page)
                 response.raise_for_status()
                 content = self._body_of(response)
                 
@@ -821,6 +911,9 @@ class WaybackDownloader:
             response = self.session.get(
                 wayback_url, timeout=15, allow_redirects=True
             )
+            reason = self._bad_capture_reason(response)
+            if reason:
+                return self._fetch_nearest_good_capture(url, reason, is_html_page)
             response.raise_for_status()
             content = self._body_of(response)
             

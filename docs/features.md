@@ -6,6 +6,7 @@
 - **Recursive link discovery** -- Automatically follows links in HTML, CSS, and JS files
 - **Smart URL rewriting** -- Converts all links to relative paths for local serving
 - **Timeframe fallback** -- Tries up to three other Wayback Machine timestamps (a day either side and a week earlier) when a resource returns 404
+- **Bad capture fallback** -- When a capture is an archived error (403, 5xx) or a Cloudflare challenge page, uses the nearest capture with status 200 instead, found with one query to the Wayback CDX index
 - **Real-time progress logging** -- Displays download status and file processing as it happens
 
 ## Asset Handling

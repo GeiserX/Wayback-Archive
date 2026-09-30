@@ -221,12 +221,16 @@ class TestDownloadFileFallbacks:
         assert result is None
 
     def test_non_404_http_error(self):
-        """Non-404 HTTP errors (e.g. 500) should return None without fallback."""
+        """Wayback's own 500 (no memento-datetime) returns None without fallback."""
         import requests
 
+        urls = []
+
         def mock_get(url, **kwargs):
+            urls.append(url)
             resp = Mock()
             resp.status_code = 500
+            resp.headers = {}
             error = requests.exceptions.HTTPError(response=resp)
             resp.raise_for_status = Mock(side_effect=error)
             resp.content = b''
@@ -235,6 +239,7 @@ class TestDownloadFileFallbacks:
         self.dl.session.get = mock_get
         result = self.dl.download_file("http://example.com/style.css")
         assert result is None
+        assert len(urls) == 1
 
     def test_html_if_decode_exception_returns_content(self):
         """If decoding the if_ response fails, content should still be returned."""

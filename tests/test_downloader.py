@@ -80,6 +80,8 @@ class TestWaybackDownloader:
     def test_download_file(self, mock_get):
         """Test file downloading."""
         mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.headers = {}
         mock_response.content = b"test content"
         mock_response.raise_for_status = Mock()
         mock_get.return_value = mock_response
