@@ -33,3 +33,10 @@ def test_classifiers_list_exactly_the_ci_versions():
         for v in re.findall(r'"Programming Language :: Python :: (\d+\.\d+)"', PYPROJECT)
     )
     assert listed == _ci_matrix()
+
+
+def test_pytest_settings_are_loaded(pytestconfig):
+    # pytest reads settings from pyproject.toml or a root-level ini file only;
+    # a file under config/ is silently ignored.
+    assert pytestconfig.inipath == ROOT / "pyproject.toml"
+    assert pytestconfig.getini("testpaths") == ["tests"]
