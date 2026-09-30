@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Optional, Set, Dict, List, Tuple
 import requests
 from requests.adapters import HTTPAdapter
+from urllib3.exceptions import MaxRetryError
 from urllib3.util.retry import Retry
 from bs4 import BeautifulSoup, Comment
 from bs4.dammit import EncodingDetector
@@ -40,10 +41,19 @@ class _PoliteRetry(Retry):
     """Waits out a 429 as Retry-After asks, but never longer than RETRY_AFTER_MAX."""
 
     RETRY_AFTER_MAX = 30
+    # urllib3 also retries a 503 or 413 that carries Retry-After by default.
+    RETRY_AFTER_STATUS_CODES = frozenset({429})
 
     def get_retry_after(self, response):
         retry_after = super().get_retry_after(response)
         return None if retry_after is None else min(retry_after, self.RETRY_AFTER_MAX)
+
+    def increment(self, method=None, url=None, response=None, error=None, _pool=None, _stacktrace=None):
+        # A 429 with memento-datetime is an archived capture, not throttling;
+        # MaxRetryError makes urllib3 hand it back without retrying.
+        if response is not None and response.headers.get("memento-datetime"):
+            raise MaxRetryError(_pool, url, "archived capture")
+        return super().increment(method, url, response, error, _pool, _stacktrace)
 
 
 class WaybackDownloader:
@@ -141,8 +151,9 @@ class WaybackDownloader:
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
             }
         )
-        # Wayback throttles with 429: wait and retry a few times. A 5xx is
-        # not retried, since Wayback replays archived 5xx captures as such.
+        # Wayback throttles with 429: wait and retry a few times. A 5xx, or
+        # an archived 429, is not retried, since Wayback replays archived
+        # error captures as such.
         self.session.mount("https://web.archive.org/", HTTPAdapter(max_retries=_PoliteRetry(
             total=3, connect=0, read=0, other=0, status_forcelist=[429],
             backoff_factor=2, respect_retry_after_header=True, raise_on_status=False,
@@ -901,13 +912,13 @@ class WaybackDownloader:
                 response = self.session.get(
                     wayback_url_if, timeout=15, allow_redirects=True
                 )
+                reason = self._bad_capture_reason(response)
+                if reason:
+                    return self._fetch_nearest_good_capture(url, reason, is_html_page)
                 if response.status_code == 429:
                     # Still throttled after the retries; the plain URL would be too.
                     self._last_failure = "throttled"
                     return None
-                reason = self._bad_capture_reason(response)
-                if reason:
-                    return self._fetch_nearest_good_capture(url, reason, is_html_page)
                 response.raise_for_status()
                 content = self._body_of(response)
                 

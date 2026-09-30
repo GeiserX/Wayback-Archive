@@ -217,6 +217,18 @@ class TestBadCapture:
         assert dl.download_file("http://example.com/about") == GOOD_PAGE
         assert len(_cdx_calls(dl)) == 1
 
+    def test_archived_429_page_is_a_bad_capture_not_throttling(self):
+        """Wayback's own 429 has no memento-datetime; an archived one is the
+        site's answer, and a page is treated like an asset."""
+        dl = _make_downloader()
+        dl.session.get = _Recorder(_BadCaptureWayback(
+            _Response(429, b"Too Many Requests", headers=ARCHIVED),
+            lambda kwargs: _cdx_rows("20191231230000"),
+        ))
+        assert dl.download_file("http://example.com/about") == GOOD_PAGE
+        assert len(_cdx_calls(dl)) == 1
+        assert dl._last_failure is None
+
     def test_good_page_mentioning_challenge_platform_is_kept(self):
         """Negative control: Cloudflare injects challenge-platform into normal pages."""
         page = (
@@ -370,10 +382,18 @@ class TestThrottling:
         assert response.status_code == 200
         assert local_server.hits == 3
 
-    def test_5xx_is_not_retried(self, local_server):
-        local_server.answers = [(503, {}), (200, {})]
+    @pytest.mark.parametrize("status, headers", [
+        (503, {}),
+        (503, {"Retry-After": "0"}),
+        (413, {"Retry-After": "0"}),
+        (429, {"Retry-After": "0", **ARCHIVED}),
+    ])
+    def test_5xx_is_not_retried(self, local_server, status, headers):
+        """Only Wayback's own 429 is retried: a 503 or 413 with Retry-After
+        is not, and neither is an archived 429 (it has memento-datetime)."""
+        local_server.answers = [(status, headers), (200, {})]
         session, base = self._session_on(local_server)
-        assert session.get(base + "x", timeout=5).status_code == 503
+        assert session.get(base + "x", timeout=5).status_code == status
         assert local_server.hits == 1
 
     def test_retries_are_bounded(self, local_server):
@@ -554,3 +574,4 @@ class TestJqueryReplacement:
         dl.download()
         live = [url for url, _ in dl.session.get.calls if "code.jquery.com" in url]
         assert live == [f"https://code.jquery.com/jquery-{version}.min.js"]
+
