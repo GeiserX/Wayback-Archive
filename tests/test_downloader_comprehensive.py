@@ -523,10 +523,10 @@ class TestToRelativePath:
 
 
 # ===================================================================
-# _generate_timestamp_variants
+# _fallback_timestamps
 # ===================================================================
 
-class TestGenerateTimestampVariants:
+class TestFallbackTimestamps:
 
     def setup_method(self):
         self.dl = _make_downloader()
@@ -534,22 +534,19 @@ class TestGenerateTimestampVariants:
     def teardown_method(self):
         _cleanup_env("WAYBACK_URL")
 
-    def test_generates_variants(self):
-        variants = self.dl._generate_timestamp_variants(hours_range=6, step_hours=2)
-        assert len(variants) > 0
+    def test_generates_at_most_three(self):
+        variants = self.dl._fallback_timestamps()
+        assert 0 < len(variants) <= 3
         assert all(len(v) == 14 for v in variants)
 
-    def test_sorted_by_proximity(self):
-        variants = self.dl._generate_timestamp_variants(hours_range=12, step_hours=1)
-        # First variant should be closer to original than last
-        base_time = self.dl.original_datetime
-        diffs = [abs((datetime.strptime(ts, '%Y%m%d%H%M%S') - base_time).total_seconds()) for ts in variants]
-        assert diffs == sorted(diffs)
+    def test_distinct(self):
+        variants = self.dl._fallback_timestamps()
+        assert len(set(variants)) == len(variants)
 
     def test_excludes_original(self):
         """Variant list should not include the exact original timestamp."""
         original_ts = self.dl.original_datetime.strftime('%Y%m%d%H%M%S')
-        variants = self.dl._generate_timestamp_variants(hours_range=2, step_hours=1)
+        variants = self.dl._fallback_timestamps()
         assert original_ts not in variants
 
 

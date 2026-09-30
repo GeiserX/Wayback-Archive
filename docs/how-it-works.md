@@ -6,7 +6,7 @@
 4. **JS processing** -- Extracts dynamically loaded resources from JavaScript
 5. **Data attributes** -- Scans `data-*` attributes for additional asset URLs
 6. **Iterative crawling** -- Continues discovering and downloading resources until the queue is empty
-7. **Timeframe fallback** -- For 404 responses, searches nearby Wayback Machine timestamps
+7. **Timeframe fallback** -- For 404 responses, tries up to three other timestamps: a day either side and a week earlier. Wayback already answers any timestamp with the nearest capture, so closer probes would land on the same answer
 8. **URL rewriting** -- Converts all URLs to relative paths for offline serving
 9. **Preservation** -- Maintains icon groups, button links, and cookie consent functionality
 

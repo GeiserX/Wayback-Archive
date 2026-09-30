@@ -82,3 +82,35 @@ class TestInterrupt:
         with pytest.raises(KeyboardInterrupt):
             dl.download_file("http://example.com/logo.png")
         assert len(dl.session.get.calls) == 3
+
+
+class TestMissingUrl:
+    """Wayback already snaps any timestamp to the nearest capture, so a 404
+    is worth at most three distinct probes, not thirteen overlapping ones."""
+
+    def test_missing_asset_costs_at_most_four_requests_all_distinct(self):
+        dl = _make_downloader()
+        dl.session.get = _Recorder(lambda url, kwargs: _Response(404))
+        assert dl.download_file("http://example.com/missing.png") is None
+        urls = [url for url, _ in dl.session.get.calls]
+        assert len(urls) <= 4
+        assert len(set(urls)) == len(urls)
+
+    def test_missing_page_costs_at_most_five_requests_all_distinct(self):
+        dl = _make_downloader()
+        dl.session.get = _Recorder(lambda url, kwargs: _Response(404))
+        assert dl.download_file("http://example.com/gone") is None
+        urls = [url for url, _ in dl.session.get.calls]
+        assert len(urls) <= 5
+        assert len(set(urls)) == len(urls)
+
+    def test_a_probe_that_lands_on_a_good_capture_is_used(self):
+        dl = _make_downloader()
+
+        def handler(url, kwargs):
+            if f"/{TS}" in url:
+                return _Response(404)
+            return _Response(200, b"PNGDATA")
+
+        dl.session.get = _Recorder(handler)
+        assert dl.download_file("http://example.com/logo.png") == b"PNGDATA"

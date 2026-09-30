@@ -5,7 +5,7 @@
 - **Full website download** -- HTML, CSS, JS, images, fonts, and all linked assets
 - **Recursive link discovery** -- Automatically follows links in HTML, CSS, and JS files
 - **Smart URL rewriting** -- Converts all links to relative paths for local serving
-- **Timeframe fallback** -- Searches nearby Wayback Machine timestamps when a resource returns 404
+- **Timeframe fallback** -- Tries up to three other Wayback Machine timestamps (a day either side and a week earlier) when a resource returns 404
 - **Real-time progress logging** -- Displays download status and file processing as it happens
 
 ## Asset Handling

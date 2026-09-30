@@ -725,31 +725,19 @@ class WaybackDownloader:
             from_dir = posixpath.dirname(from_path)
         return posixpath.relpath(abs_path, from_dir or "/")
 
-    def _generate_timestamp_variants(self, hours_range: int = 24, step_hours: int = 1) -> List[str]:
-        """Generate timestamp variants for timeframe search.
-        
-        Args:
-            hours_range: How many hours before/after to search
-            step_hours: Step size in hours between attempts
-            
-        Returns:
-            List of timestamp strings (YYYYMMDDHHMMSS format)
-        """
-        timestamps = []
-        base_time = self.original_datetime
-        
-        # Try timestamps before and after the original
-        for hours_offset in range(-hours_range, hours_range + 1, step_hours):
-            if hours_offset == 0:
-                continue  # Skip the original timestamp (already tried)
-            variant_time = base_time + timedelta(hours=hours_offset)
-            timestamp_str = variant_time.strftime('%Y%m%d%H%M%S')
-            timestamps.append(timestamp_str)
-        
-        # Sort by proximity to original (closest first)
-        timestamps.sort(key=lambda ts: abs((datetime.strptime(ts, '%Y%m%d%H%M%S') - base_time).total_seconds()))
-        
-        return timestamps
+    # Offsets, in hours, of the other timestamps tried after a 404. Wayback
+    # already answers any timestamp with the nearest capture, so a nearby
+    # probe lands on the same answer; only a probe far enough away to have a
+    # different nearest capture can find the file.
+    FALLBACK_OFFSETS_HOURS = (-24, 24, -168)
+
+    def _fallback_timestamps(self) -> List[str]:
+        """The distinct timestamps to try after a 404, closest first."""
+        timestamps = (
+            (self.original_datetime + timedelta(hours=hours)).strftime('%Y%m%d%H%M%S')
+            for hours in self.FALLBACK_OFFSETS_HOURS
+        )
+        return list(dict.fromkeys(timestamps))
 
     def _is_corrupted_font(self, content: bytes, url: str) -> bool:
         """Check if a downloaded font file is actually an HTML error page.
@@ -847,49 +835,26 @@ class WaybackDownloader:
             return content
         except requests.exceptions.HTTPError as e:
             if hasattr(e, 'response') and e.response is not None and e.response.status_code == 404:
-                # File not found at original timestamp, try nearby timestamps
-                # Use progressively wider search ranges with limited attempts
-                for search_range, step, max_attempts in [(12, 2, 5), (48, 6, 5), (168, 24, 3)]:
-                    timestamps = self._generate_timestamp_variants(
-                        hours_range=search_range, step_hours=step
-                    )
-                    
-                    for timestamp in timestamps[:max_attempts]:
-                        try:
-                            # For HTML pages, try if_ version first
-                            if is_html_page:
-                                variant_url = self._convert_to_wayback_url_with_timestamp(url, timestamp, use_iframe=True)
-                                variant_response = self.session.get(
-                                    variant_url, timeout=10, allow_redirects=True
-                                )
-                                if variant_response.status_code == 200:
-                                    content = self._body_of(variant_response)
-                                    # The if_ version should have the actual page content
-                                    # (it may still have Wayback scripts but that's fine)
-                                    # Check if font file is corrupted
-                                    if self._is_corrupted_font(content, url):
-                                        normalized_url = self._normalize_url(url, self.config.base_url)
-                                        self.corrupted_fonts.add(normalized_url)
-                                        print(f"         ⚠️  Font file is corrupted (HTML error page) - will be removed from CSS", flush=True)
-                                        continue  # Try next timestamp
-                                    return content
-                            else:
-                                variant_url = self._convert_to_wayback_url_with_timestamp(url, timestamp)
-                                variant_response = self.session.get(
-                                    variant_url, timeout=10, allow_redirects=True
-                                )
-                                if variant_response.status_code == 200:
-                                    content = self._body_of(variant_response)
-                                    # Check if font file is corrupted
-                                    if self._is_corrupted_font(content, url):
-                                        normalized_url = self._normalize_url(url, self.config.base_url)
-                                        self.corrupted_fonts.add(normalized_url)
-                                        print(f"         ⚠️  Font file is corrupted (HTML error page) - will be removed from CSS", flush=True)
-                                        continue  # Try next timestamp
-                                    return content
-                        except Exception:
-                            continue
-                
+                # File not found at original timestamp, try a few others
+                for timestamp in self._fallback_timestamps():
+                    try:
+                        variant_url = self._convert_to_wayback_url_with_timestamp(
+                            url, timestamp, use_iframe=is_html_page
+                        )
+                        variant_response = self.session.get(
+                            variant_url, timeout=10, allow_redirects=True
+                        )
+                        if variant_response.status_code == 200:
+                            content = self._body_of(variant_response)
+                            if self._is_corrupted_font(content, url):
+                                normalized_url = self._normalize_url(url, self.config.base_url)
+                                self.corrupted_fonts.add(normalized_url)
+                                print(f"         ⚠️  Font file is corrupted (HTML error page) - will be removed from CSS", flush=True)
+                                continue  # Try next timestamp
+                            return content
+                    except Exception:
+                        continue
+
                 # All Wayback attempts failed - try a well-known CDN live (only for assets, not HTML pages)
                 if not is_html_page:
                     return self._fetch_from_live_cdn(url)
