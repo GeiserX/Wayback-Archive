@@ -877,6 +877,7 @@ class WaybackDownloader:
             rows = response.json()
         except Exception:
             self._cdx_failures += 1
+            print("         ⚠️  The Wayback CDX index did not answer, so no other capture could be looked up", flush=True)
             if self._cdx_failures == self.CDX_MAX_CONSECUTIVE_FAILURES:
                 print("         ⚠️  The Wayback CDX index is not answering; no more capture lookups this run", flush=True)
             return None
@@ -884,6 +885,7 @@ class WaybackDownloader:
         for row in rows[1:]:
             if row and str(row[0]) != bad_timestamp:
                 return str(row[0])
+        print("         ⚠️  No good capture found", flush=True)
         return None
 
     def _fetch_nearest_good_capture(self, url: str, reason: str, is_html_page: bool, bad_response) -> Optional[bytes]:
@@ -894,7 +896,6 @@ class WaybackDownloader:
         bad_timestamp = served.group(1) if served else self.original_datetime.strftime('%Y%m%d%H%M%S')
         timestamp = self._nearest_good_timestamp(url, bad_timestamp)
         if not timestamp:
-            print(f"         ⚠️  No good capture found", flush=True)
             return None
         fallback_url = self._convert_to_wayback_url_with_timestamp(url, timestamp, use_iframe=is_html_page)
         try:
