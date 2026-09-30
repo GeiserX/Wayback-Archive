@@ -386,3 +386,25 @@ class TestUrlsWithParentheses:
         css = f"a{{background:url({W}im_/https://site.com/img/photo_(1).jpg)}}"
         assert dl._extract_css_urls(css, "https://site.com/css/style.css") == ["https://site.com/img/photo_(1).jpg"]
         assert dl._rewrite_css_urls(css, "https://site.com/css/style.css") == "a{background:url(../img/photo_%281%29.jpg)}"
+
+
+class TestGoogleFontsInsideStylesheets:
+    """A site stylesheet's Google Fonts @import points at the file stored."""
+
+    def test_imports_point_at_the_stored_font_stylesheets(self):
+        import re
+        dl = _make_dl()
+        dl._current_page_url = "https://site.com/css/style.css"
+        css = (
+            f"@import url({W}cs_/https://fonts.googleapis.com/css?family=Open+Sans:400,700); "
+            '@import url("https://fonts.googleapis.com/css?family=Lato"); '
+            '@import "https://fonts.googleapis.com/css2?family=Roboto"; '
+            "a{src:url(https://fonts.gstatic.com/s/x/v1/a.woff2)}"
+        )
+        out = dl._rewrite_css_urls(css, "https://site.com/css/style.css")
+        assert "css.css" not in out
+        imports = re.findall(r"\.\./fonts\.googleapis\.com/css-[0-9a-f]{8}\.css", out)
+        assert len(imports) == 3 and len(set(imports)) == 3
+        for url in dl._extract_css_urls(css, "https://site.com/css/style.css")[:3]:
+            assert dl._make_relative_path(url, "stylesheet") in imports
+        assert "url(../fonts.gstatic.com/s/x/v1/a.woff2)" in out

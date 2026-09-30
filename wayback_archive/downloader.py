@@ -1416,29 +1416,10 @@ class WaybackDownloader:
                     self._note_reference_kind(normalized, reference_kind)
 
                 if self.config.make_internal_links_relative:
-                    # For Google Fonts, construct relative path from the normalized URL
-                    if is_google_font:
-                        # Construct path directly from URL to avoid path duplication
-                        parsed_font = urlparse(normalized)
-                        if "fonts.gstatic.com" in parsed_font.netloc:
-                            # Path will be like fonts.gstatic.com/s/montserrat/v29/...
-                            # Check if path already contains the domain (avoid duplication)
-                            font_path = parsed_font.path.lstrip("/")
-                            if font_path.startswith("fonts.gstatic.com"):
-                                relative_path = font_path
-                            else:
-                                relative_path = f"{parsed_font.netloc}/{font_path}"
-                        elif "fonts.googleapis.com" in parsed_font.netloc:
-                            # For Google Fonts CSS files
-                            relative_path = parsed_font.path.lstrip("/")
-                        else:
-                            relative_path = parsed_font.path.lstrip("/")
-                        # Ensure it starts with / for absolute paths
-                        if not relative_path.startswith("/"):
-                            relative_path = "/" + relative_path
-                        new_path = relative_path
-                    else:
-                        new_path = self._make_relative_path(normalized, reference_kind)
+                    # _get_local_path knows where Google Fonts files are
+                    # stored (css-<hash>.css for a stylesheet), so the link
+                    # goes through it like any other.
+                    new_path = self._make_relative_path(normalized, reference_kind)
                     return f"url({new_path})"
                 return f"url({normalized})"
             
@@ -1470,7 +1451,11 @@ class WaybackDownloader:
                 url_part = f"{parsed_base.scheme}://{parsed_base.netloc}{url_part}"
 
             normalized = self._normalize_url(url_part, base_url)
-            if not (self._is_internal_url(normalized) or self._is_squarespace_cdn(normalized)):
+            if not (
+                self._is_internal_url(normalized)
+                or self._is_squarespace_cdn(normalized)
+                or self._is_google_fonts_css(normalized)
+            ):
                 return match.group(0)
 
             # Note it before the branch below, which does not run with
@@ -1493,17 +1478,16 @@ class WaybackDownloader:
             flags=re.IGNORECASE,
         )
 
-        # Pattern to match url() with wayback URLs and absolute paths
-        url_patterns = [
-            r'url\s*\(\s*["\']?(https?://web\.archive\.org/web/\d+[a-z]*(?:im_|cs_|js_|jm_)/https?://(?:[^"\'()]|\([^"\'()]*\))+)["\']?\s*\)',  # Absolute wayback (check first)
-            r'url\s*\(\s*["\']?(/web/\d+[a-z]*(?:im_|cs_|js_|jm_)/https?://(?:[^"\'()]|\([^"\'()]*\))+)["\']?\s*\)',  # Relative wayback
-            r'url\s*\(\s*["\']?(https?://(?:[^"\'()]|\([^"\'()]*\))+)["\']?\s*\)',  # Regular URLs
-            r'url\s*\(\s*["\']?(/(?:[^"\'()]|\([^"\'()]*\))+)["\']?\s*\)',  # Absolute paths (for Google Fonts CSS)
-        ]
-        
-        for pattern in url_patterns:
-            css = re.sub(pattern, replace_css_url, css, flags=re.IGNORECASE)
-        
+        # url() holding an absolute URL (Wayback form included) or a
+        # root-relative path. One pass: a second pattern run after the first
+        # re-matched the paths it had just written.
+        css = re.sub(
+            r'url\s*\(\s*["\']?((?:https?://|/)(?:[^"\'()]|\([^"\'()]*\))+)["\']?\s*\)',
+            replace_css_url,
+            css,
+            flags=re.IGNORECASE,
+        )
+
         return css
 
     def _extract_js_urls(self, js: str, base_url: str) -> List[str]:
