@@ -247,6 +247,21 @@ class TestAnchors:
         assert [a["href"] for a in soup.find_all("a")] == ["#myCarousel", "#", "../about.html#team"]
         assert links == ["https://site.com/about"]
 
+    def test_fragments_survive_with_relative_links_off(self):
+        dl = _make_dl(MAKE_INTERNAL_LINKS_RELATIVE="false")
+        soup, _ = _process(dl, f'<html><body><a href="{W}/https://site.com/about#team">a</a></body></html>')
+        assert soup.a["href"] == "https://site.com/about#team"
+
+    def test_area_and_meta_refresh_keep_their_fragments(self):
+        dl = _make_dl()
+        soup, links = _process(dl, (
+            '<html><head><meta http-equiv="refresh" content="0; url=next.html#a"></head><body>'
+            f'<map><area href="{W}/https://site.com/about#team"></map></body></html>'
+        ))
+        assert soup.meta["content"] == "0; url=next.html#a"
+        assert soup.area["href"] == "about.html#team"
+        assert "https://site.com/next.html" in links
+
     def test_javascript_links_are_left_alone(self):
         dl = _make_dl()
         soup, _ = _process(dl, (
@@ -313,6 +328,12 @@ class TestSvgUseSprites:
         ), page="https://site.com/blog/post")
         assert soup.find("use")["xlink:href"] == "../assets/sprite.svg#icon-search"
         assert "https://site.com/assets/sprite.svg" in links
+
+    def test_external_sprite_keeps_its_symbol_with_relative_links_off(self):
+        dl = _make_dl(MAKE_INTERNAL_LINKS_RELATIVE="false")
+        soup, links = _process(dl, f'<html><body><svg><use xlink:href="{W}im_/https://site.com/s.svg#i"></use></svg></body></html>')
+        assert soup.find("use")["xlink:href"] == "https://site.com/s.svg#i"
+        assert "https://site.com/s.svg" in links
 
     def test_same_page_symbol_keeps_the_fragment(self):
         dl = _make_dl()

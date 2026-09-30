@@ -1996,10 +1996,13 @@ class WaybackDownloader:
             target = self._extract_original_url_from_path(target) or target
             normalized_url = self._normalize_url(target, base_url)
             if self._is_internal_url(normalized_url):
+                # Normalizing drops the fragment; the redirect keeps it.
+                fragment = urlparse(target).fragment
+                fragment = "#" + fragment if fragment else ""
                 if self.config.make_internal_links_relative:
-                    target = self._get_relative_link_path(normalized_url, "page")
+                    target = self._get_relative_link_path(normalized_url, "page") + fragment
                 else:
-                    target = normalized_url
+                    target = normalized_url + fragment
                 if normalized_url not in self.config.visited_urls:
                     links_to_follow.append(normalized_url)
             meta["content"] = f"{delay}; url={target}"
@@ -2297,6 +2300,10 @@ class WaybackDownloader:
             is_sqcdn_norm = self._is_squarespace_cdn(normalized)
             if not (self._is_internal_url(normalized) or is_sqcdn_norm):
                 return
+            # Normalizing drops the fragment (#team, a sprite's #icon); the
+            # attribute keeps it.
+            fragment = urlparse(attr_value).fragment
+            fragment = "#" + fragment if fragment else ""
             kind = "image" if attr_name == "poster" or element.name in ("img", "image", "input") else "asset"
             if self.config.make_internal_links_relative:
                 if is_sqcdn_norm:
@@ -2306,12 +2313,12 @@ class WaybackDownloader:
                         asset_path += "?" + parsed_asset.query
                     while asset_path.startswith("/"):
                         asset_path = asset_path[1:]
-                    element[attr_name] = self._to_relative_path(f"/{asset_path}")
+                    element[attr_name] = self._to_relative_path(f"/{asset_path}") + fragment
                 else:
-                    element[attr_name] = self._get_relative_link_path(normalized, kind)
+                    element[attr_name] = self._get_relative_link_path(normalized, kind) + fragment
             else:
                 # Keep normalized URL but ensure it uses the correct scheme
-                element[attr_name] = normalized
+                element[attr_name] = normalized + fragment
                 if kind == "image":
                     self._note_reference_kind(normalized, kind)
             if element.name not in ("a", "form", "base", "link") and normalized not in self.config.visited_urls:
