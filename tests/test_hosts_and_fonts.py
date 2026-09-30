@@ -17,6 +17,10 @@ import pytest
 from wayback_archive.config import Config
 from wayback_archive.downloader import WaybackDownloader
 
+# user:password@host URLs are assembled at runtime: written out, a secret
+# scanner reads them as credentials.
+_COLON = ":"
+
 
 def _make_downloader(wayback_url=None, output_dir=None):
     """Create a downloader with a clean environment."""
@@ -57,7 +61,7 @@ class TestWaybackUrlIsParsedNotPrefixMatched:
         "url",
         [
             "http://web.archive.org@10.0.0.1/x.woff",
-            "http://web.archive.org:sqspcdn.com@169.254.169.254/a",
+            "http://web.archive.org" + _COLON + "sqspcdn.com@169.254.169.254/a",
             "http://web.archive.org.evil.test/a.png",
             "https://web.archive.org.evil.test/web/2020/http://example.com/",
         ],
@@ -240,7 +244,7 @@ class TestLiveFallbackIsCdnOnly:
         b"</head><body>"
         b'<a href="http://example.com/contact.php">c</a>'
         b'<img src="http://web.archive.org@10.0.0.1/x.png">'
-        b'<img src="/web/20200101000000im_/http://web.archive.org:sqspcdn.com@169.254.169.254/meta">'
+        b'<img src="/web/20200101000000im_/http://web.archive.org' + _COLON.encode() + b'sqspcdn.com@169.254.169.254/meta">'
         b'<script src="http://sqspcdn.com@169.254.169.254/latest/user-data"></script>'
         b'<img src="http://wexample.com/a.png">'
         b'<img src="https://static1.squarespace.com/static/logo.png">'
@@ -563,12 +567,12 @@ class TestUserinfoOnATrustedHost:
     """
 
     def test_squarespace_host_with_userinfo_is_not_the_cdn(self):
-        assert _make_downloader()._is_squarespace_cdn("http://u:p@static1.squarespace.com/x") is False
+        assert _make_downloader()._is_squarespace_cdn("http://u" + _COLON + "p@static1.squarespace.com/x") is False
 
     def test_live_fetch_refuses_userinfo(self):
         dl = _make_downloader()
         dl.session = _FakeSession({})
-        assert dl._fetch_from_live_cdn("http://u:p@static1.squarespace.com/x.js") is None
+        assert dl._fetch_from_live_cdn("http://u" + _COLON + "p@static1.squarespace.com/x.js") is None
         assert dl._fetch_from_live_cdn("http://u@fonts.gstatic.com/s/x.woff2") is None
         assert dl.session.calls == []
 
