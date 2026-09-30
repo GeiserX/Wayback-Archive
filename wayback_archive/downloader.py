@@ -323,6 +323,22 @@ class WaybackDownloader:
         """Check if URL is an ad."""
         return self._matches_blocklist(url, self.AD_HOSTS, self.AD_HOST_LABELS)
 
+    # One URL and nothing else: no whitespace, no JSON or script punctuation.
+    _SINGLE_URL = re.compile(r"[^\s{}\[\]\"'<>;]+")
+
+    def _is_single_url_attr(self, attr_name: str, value: str) -> bool:
+        """
+        True when an attribute value is plainly one URL.
+
+        The catch-all passes used to rewrite any value that mentioned the
+        site, which turned JSON settings, inline handlers and meta refresh
+        content into a percent-encoded file name.
+        """
+        if attr_name.startswith("on") or attr_name in ("style", "srcset", "imagesrcset"):
+            return False
+        value = value.strip()
+        return bool(self._SINGLE_URL.fullmatch(value)) and value.startswith(("http://", "https://", "/"))
+
     def _is_contact_link(self, url: str) -> bool:
         """Check if URL is a contact link."""
         for pattern in self.CONTACT_PATTERNS:
@@ -1889,6 +1905,26 @@ class WaybackDownloader:
             if normalized_url not in self.config.visited_urls:
                 links_to_follow.append(original_url)
 
+        # <meta http-equiv="refresh" content="5; url=...">: a redirect page.
+        # Rewrite its target like a link and keep the delay.
+        for meta in soup.find_all("meta", content=True):
+            if str(meta.get("http-equiv", "")).lower() != "refresh":
+                continue
+            match = re.match(r"^\s*(\d+)\s*[;,]\s*url\s*=\s*['\"]?(.*?)['\"]?\s*$", meta["content"], re.IGNORECASE)
+            if not match:
+                continue
+            delay, target = match.groups()
+            target = self._extract_original_url_from_path(target) or target
+            normalized_url = self._normalize_url(target, base_url)
+            if self._is_internal_url(normalized_url):
+                if self.config.make_internal_links_relative:
+                    target = self._get_relative_link_path(normalized_url, "page")
+                else:
+                    target = normalized_url
+                if normalized_url not in self.config.visited_urls:
+                    links_to_follow.append(normalized_url)
+            meta["content"] = f"{delay}; url={target}"
+
         # Process images
         for img in soup.find_all("img", src=True):
             src = img["src"]
@@ -2213,39 +2249,50 @@ class WaybackDownloader:
                 css_content = self._remove_corrupted_fonts_from_css(css_content)
                 style_tag.string = css_content
 
+        # The two passes below rewrite URLs left in any attribute. Whatever
+        # they point at locally has to be downloaded too, except navigation
+        # (<a>, <form>, <base>, <link>), which the passes above handle.
+        def rewrite_attr_url(element, attr_name, attr_value):
+            # Extract original URL if it's a wayback path
+            original = self._extract_original_url_from_path(attr_value)
+            if original:
+                attr_value = original
+
+            # Normalize and convert to relative path if internal or Squarespace CDN
+            normalized = self._normalize_url(attr_value, base_url)
+            is_sqcdn_norm = self._is_squarespace_cdn(normalized)
+            if not (self._is_internal_url(normalized) or is_sqcdn_norm):
+                return
+            kind = "image" if attr_name == "poster" or element.name in ("img", "image", "input") else "asset"
+            if self.config.make_internal_links_relative:
+                if is_sqcdn_norm:
+                    parsed_asset = urlparse(normalized)
+                    asset_path = f"{parsed_asset.netloc}{parsed_asset.path}"
+                    if parsed_asset.query:
+                        asset_path += "?" + parsed_asset.query
+                    while asset_path.startswith("/"):
+                        asset_path = asset_path[1:]
+                    element[attr_name] = self._to_relative_path(f"/{asset_path}")
+                else:
+                    element[attr_name] = self._get_relative_link_path(normalized, kind)
+            else:
+                # Keep normalized URL but ensure it uses the correct scheme
+                element[attr_name] = normalized
+                if kind == "image":
+                    self._note_reference_kind(normalized, kind)
+            if element.name not in ("a", "form", "base", "link") and normalized not in self.config.visited_urls:
+                links_to_follow.append(attr_value)
+
         # Process data-* attributes that contain URLs (e.g., data-video_src, data-src, data-href, etc.)
         # Convert domain URLs to relative paths to match Wayback Machine behavior
         for element in soup.find_all(True):  # All elements
             if not hasattr(element, 'attrs') or not element.attrs:
                 continue
-            for attr_name, attr_value in element.attrs.items():
-                if attr_name.startswith('data-') and isinstance(attr_value, str):
+            for attr_name, attr_value in list(element.attrs.items()):
+                if attr_name.startswith('data-') and isinstance(attr_value, str) and self._is_single_url_attr(attr_name, attr_value):
                     # Check if attribute contains a domain URL
                     if (self.config.domain and self.config.domain in attr_value) or self._is_squarespace_cdn(attr_value):
-                        # Extract original URL if it's a wayback path
-                        original = self._extract_original_url_from_path(attr_value)
-                        if original:
-                            attr_value = original
-                        
-                        # Normalize and convert to relative path if internal
-                        normalized = self._normalize_url(attr_value, base_url)
-                        is_squarespace_cdn = self._is_squarespace_cdn(normalized)
-                        if (self._is_internal_url(normalized) or is_squarespace_cdn) and self.config.make_internal_links_relative:
-                            # Convert to relative path
-                            if is_squarespace_cdn:
-                                parsed_asset = urlparse(normalized)
-                                asset_path = f"{parsed_asset.netloc}{parsed_asset.path}"
-                                if parsed_asset.query:
-                                    asset_path += "?" + parsed_asset.query
-                                while asset_path.startswith("/"):
-                                    asset_path = asset_path[1:]
-                                element[attr_name] = self._to_relative_path(f"/{asset_path}")
-                            else:
-                                relative_path = self._get_relative_link_path(normalized, "asset")
-                                element[attr_name] = relative_path
-                        elif self._is_internal_url(normalized) or is_squarespace_cdn:
-                            # Keep normalized URL but ensure it uses the correct scheme
-                            element[attr_name] = normalized
+                        rewrite_attr_url(element, attr_name, attr_value.strip())
 
         # Convert any remaining domain references in text content and attributes to relative paths
         # This handles cases where domain URLs appear in href, src, or other attributes
@@ -2254,32 +2301,14 @@ class WaybackDownloader:
         
         for element in soup.find_all(True):  # All elements
             for attr_name, attr_value in list(element.attrs.items()):
-                if isinstance(attr_value, str) and (base_domain in attr_value.lower() or self._is_squarespace_cdn(attr_value) or "web.archive.org" in attr_value or attr_value.startswith("/web/")):
+                if not (isinstance(attr_value, str) and self._is_single_url_attr(attr_name, attr_value)):
+                    continue
+                attr_value = attr_value.strip()
+                if base_domain in attr_value.lower() or self._is_squarespace_cdn(attr_value) or "web.archive.org" in attr_value or attr_value.startswith("/web/"):
                     # Check if it's a full URL with the domain or a Squarespace CDN URL
                     is_squarespace_cdn = self._is_squarespace_cdn(attr_value)
                     if attr_value.startswith(("http://", "https://", "/web/")) or is_squarespace_cdn or "web.archive.org" in attr_value:
-                        # Extract original URL if it's a wayback path
-                        original = self._extract_original_url_from_path(attr_value)
-                        if original:
-                            attr_value = original
-                        
-                        # Normalize and convert to relative path if internal or Squarespace CDN
-                        normalized = self._normalize_url(attr_value, base_url)
-                        is_sqcdn_norm = self._is_squarespace_cdn(normalized)
-                        if (self._is_internal_url(normalized) or is_sqcdn_norm) and self.config.make_internal_links_relative:
-                            if is_sqcdn_norm:
-                                parsed_asset = urlparse(normalized)
-                                asset_path = f"{parsed_asset.netloc}{parsed_asset.path}"
-                                if parsed_asset.query:
-                                    asset_path += "?" + parsed_asset.query
-                                while asset_path.startswith("/"):
-                                    asset_path = asset_path[1:]
-                                element[attr_name] = self._to_relative_path(f"/{asset_path}")
-                            else:
-                                relative_path = self._get_relative_link_path(normalized, "asset")
-                                element[attr_name] = relative_path
-                        elif self._is_internal_url(normalized) or is_sqcdn_norm:
-                            element[attr_name] = normalized
+                        rewrite_attr_url(element, attr_name, attr_value)
 
         # Get processed HTML
         processed_html = str(soup)

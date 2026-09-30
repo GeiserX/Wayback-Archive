@@ -121,3 +121,60 @@ class TestTrackerAndAdRemovalMatchesHostsAndFileNames:
     ])
     def test_is_ad(self, url, expected):
         assert _make_dl()._is_ad(url) is expected
+
+
+class TestCatchAllAttributePasses:
+    """The last passes over every attribute only touch values that are plainly
+    one URL, and queue whatever they point at locally."""
+
+    def test_json_data_attribute_is_left_alone(self):
+        import json
+        dl = _make_dl()
+        value = '{"background_slideshow_gallery":[{"id":7,"url":"https:\\/\\/site.com\\/wp-content\\/uploads\\/a.jpg"}]}'
+        soup, _ = _process(dl, f"<html><body><div data-settings='{value}'></div></body></html>")
+        assert soup.div["data-settings"] == value
+        json.loads(soup.div["data-settings"])
+
+    def test_inline_handler_is_left_alone(self):
+        dl = _make_dl()
+        handler = f"location.href='{WA}/https://site.com/contact'"
+        soup, _ = _process(dl, f'<html><body><button onclick="{handler}">c</button></body></html>')
+        assert soup.button["onclick"] == handler
+
+    def test_data_attribute_that_is_not_a_url_is_left_alone(self):
+        dl = _make_dl()
+        soup, _ = _process(dl, '<html><body><div data-email="info@site.com" data-domain="site.com"></div></body></html>')
+        assert soup.div["data-email"] == "info@site.com"
+        assert soup.div["data-domain"] == "site.com"
+
+    def test_meta_refresh_keeps_its_delay_and_is_followed(self):
+        dl = _make_dl()
+        soup, links = _process(dl, (
+            f'<html><head><meta http-equiv="refresh" content="0; url={WA}/https://site.com/new-page">'
+            '</head><body></body></html>'
+        ))
+        assert soup.meta["content"] == "0; url=new-page.html"
+        assert "https://site.com/new-page" in links
+
+    def test_every_locally_rewritten_resource_is_queued(self):
+        dl = _make_dl()
+        soup, links = _process(dl, (
+            '<html><body>'
+            f'<img data-src="{W}im_/https://site.com/img/lazy.jpg" src="{W}im_/https://site.com/img/ph.gif">'
+            f'<video poster="{W}im_/https://site.com/p.jpg"><source src="{W}/https://site.com/v.mp4"></video>'
+            f'<audio src="{W}/https://site.com/a.mp3"></audio>'
+            f'<object data="{W}/https://site.com/f.swf"></object>'
+            f'<embed src="{W}/https://site.com/g.pdf">'
+            f'<svg><image href="{W}im_/https://site.com/pic.png"></image></svg>'
+            f'<input type="image" src="{W}im_/https://site.com/btn.png">'
+            '</body></html>'
+        ))
+        assert soup.img["data-src"] == "img/lazy.jpg"
+        assert soup.video["poster"] == "p.jpg"
+        for name in ("img/lazy.jpg", "p.jpg", "v.mp4", "a.mp3", "f.swf", "g.pdf", "pic.png", "btn.png"):
+            assert f"https://site.com/{name}" in links, name
+
+    def test_extensionless_poster_is_fetched_as_an_image(self):
+        dl = _make_dl()
+        _process(dl, f'<html><body><video poster="{W}im_/https://site.com/media/poster"></video></body></html>')
+        assert "im_/" in dl._convert_to_wayback_url("https://site.com/media/poster")
