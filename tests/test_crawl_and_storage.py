@@ -352,6 +352,44 @@ class TestTextIsDecodedNotDropped:
         assert '@charset "utf-8"' in saved and "iso-8859-1" not in saved
 
 
+    def test_utf8_page_with_one_stray_byte(self, tmp_path):
+        # A UTF-8 template with one pasted windows-1252 apostrophe.
+        body = (
+            '<html><head><meta charset="utf-8"><title>España</title></head>'
+            "<body><p>café it".encode("utf-8") + b"\x92" + "s año</p></body></html>".encode("utf-8")
+        )
+        html = self._saved(tmp_path, body)
+        assert "España" in html and "café" in html and "año" in html
+
+    def test_utf8_stylesheet_with_one_stray_byte(self, tmp_path):
+        page = b'<html><head><link rel="stylesheet" href="https://example.com/u.css"></head><body></body></html>'
+        css = 'a:after{content:"España"} /* it'.encode("utf-8") + b"\x92" + b"s */"
+        saved = self._saved(tmp_path, page, name="u.css", pages={"https://example.com/u.css": css})
+        assert "España" in saved
+
+    def test_latin1_bytes_under_a_utf8_label_keep_their_text(self, tmp_path):
+        body = '<html><head><meta charset="utf-8"></head><body>café año</body></html>'.encode("latin-1")
+        assert "café año" in self._saved(tmp_path, body)
+
+    def test_valid_utf8_beats_a_latin1_header(self, tmp_path):
+        # Apache's old AddDefaultCharset labels everything ISO-8859-1.
+        header = "text/plain; charset=ISO-8859-1"
+        page = (
+            '<html><head><meta charset="utf-8"><link rel="stylesheet" href="https://example.com/s.css">'
+            '<script src="https://example.com/a.js"></script><title>España</title></head>'
+            "<body>日本 café</body></html>"
+        ).encode("utf-8")
+        pages = {
+            "https://example.com/s.css": ('a:after{content:"España ✓"}'.encode("utf-8"), header),
+            "https://example.com/a.js": ('var s = "España 日本";'.encode("utf-8"), header),
+        }
+        html = self._saved(tmp_path, page, content_type="text/html; charset=ISO-8859-1", pages=pages)
+        assert "España" in html and "日本 café" in html
+        _, _, _, output_dir = _run(tmp_path / "again", {"https://example.com/": (page, None), **pages})
+        assert "España ✓" in (output_dir / "s.css").read_text(encoding="utf-8")
+        assert "España 日本" in (output_dir / "a.js").read_text(encoding="utf-8")
+
+
 class TestHtmlIsNotSavedAsAnAsset:
     """E2E-4: Wayback answers some asset requests with its own HTML page."""
 

@@ -910,10 +910,13 @@ class WaybackDownloader:
         """
         Decode a page, stylesheet or script without dropping characters.
 
-        Tries, in order: a byte order mark, the charset the HTTP response
-        named, the document's own declaration (<meta charset>, @charset),
-        UTF-8, then windows-1252 with replacement characters. Old European
-        sites are mostly ISO-8859-1 and used to lose every accented letter.
+        Tries, in order: a byte order mark, UTF-8, the charset the HTTP
+        response named, the document's own declaration (<meta charset>,
+        @charset), then windows-1252 with replacement characters. Valid UTF-8
+        is practically never Latin-1 text, and old servers labelled every
+        response ISO-8859-1. Old European sites are mostly ISO-8859-1 and used
+        to lose every accented letter. UTF-8 with a stray byte (a pasted
+        windows-1252 quote) stays UTF-8 and loses only that byte.
 
         Args:
             content: The raw bytes.
@@ -927,7 +930,7 @@ class WaybackDownloader:
             match = re.match(rb"\s*@charset\s+[\"']([\w.:-]+)[\"']", data, re.IGNORECASE)
             declared = match.group(1).decode("ascii") if match else None
 
-        for candidate in (bom_encoding, charset, declared, "utf-8", "cp1252"):
+        for candidate in (bom_encoding, "utf-8", charset, declared):
             if not candidate:
                 continue
             try:
@@ -944,6 +947,12 @@ class WaybackDownloader:
                 return data.decode(name)
             except UnicodeDecodeError:
                 continue
+        # At least as many valid multi-byte sequences as bad bytes: UTF-8
+        # with a few stray bytes. Latin-1 text almost never forms one.
+        text = data.decode("utf-8", errors="replace")
+        bad = text.count("\ufffd")
+        if sum(1 for c in text if c > "\x7f") - bad >= bad:
+            return text
         return data.decode("cp1252", errors="replace")
 
     @staticmethod
