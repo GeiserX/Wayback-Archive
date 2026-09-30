@@ -35,7 +35,8 @@ class WaybackDownloader:
     """Main downloader class for Wayback Machine archives."""
 
     # Google Fonts hosts: the stylesheet host and the font file host.
-    GOOGLE_FONT_HOSTS = ("fonts.googleapis.com", "fonts.gstatic.com")
+    GOOGLE_FONTS_CSS_HOSTS = ("fonts.googleapis.com",)
+    GOOGLE_FONT_HOSTS = GOOGLE_FONTS_CSS_HOSTS + ("fonts.gstatic.com",)
 
     SQUARESPACE_CDN_HOSTS = (
         "static1.squarespace.com",
@@ -189,6 +190,10 @@ class WaybackDownloader:
     def _is_squarespace_cdn(self, url: str) -> bool:
         """Check if URL is from Squarespace CDN (should be downloaded)."""
         return _host_matches(url, self.SQUARESPACE_CDN_HOSTS)
+
+    def _is_google_fonts_css(self, url: str) -> bool:
+        """Check if URL is a Google Fonts stylesheet (css?family=, css2?family=)."""
+        return _host_matches(url, self.GOOGLE_FONTS_CSS_HOSTS) and "/css" in urlparse(url).path
 
     @staticmethod
     def _is_html_url(url: str, parsed=None) -> bool:
@@ -560,7 +565,7 @@ class WaybackDownloader:
         parsed = urlparse(url)
         
         # Special handling for Google Fonts - preserve domain structure
-        if "fonts.googleapis.com" in parsed.netloc or "fonts.gstatic.com" in parsed.netloc:
+        if _host_matches(url, self.GOOGLE_FONT_HOSTS):
             # For Google Fonts, preserve the full domain and path structure
             # e.g., fonts.googleapis.com/css-abc123.css or fonts.gstatic.com/s/montserrat/v29/file.woff2
             domain_path = unquote(f"{parsed.netloc}{parsed.path}")
@@ -722,13 +727,14 @@ class WaybackDownloader:
         # Determine if this is an HTML page (we should NOT fallback to live for HTML)
         parsed = urlparse(url)
         path_lower = parsed.path.lower()
-        # A referenced stylesheet or script is never a page, whatever the URL
-        # looks like; asking for the iframe view of one returns the Wayback
-        # wrapper rather than the file.
-        is_html_page = self._referenced_kind(url) not in (
-            "stylesheet",
-            "script",
-        ) and self._is_html_url(url, parsed)
+        # A referenced stylesheet or script, or a Google Fonts stylesheet, is
+        # never a page, whatever the URL looks like; asking for the iframe view
+        # of one returns the Wayback wrapper rather than the file.
+        is_html_page = (
+            not self._is_google_fonts_css(url)
+            and self._referenced_kind(url) not in ("stylesheet", "script")
+            and self._is_html_url(url, parsed)
+        )
         
         # For HTML pages, try the 'if_' version first to get unwrapped content
         # This avoids the Wayback Machine interface wrapper
@@ -876,7 +882,7 @@ class WaybackDownloader:
         path = parsed.path.lower()
         
         # Check for Google Fonts CSS files (they don't have .css extension)
-        if "fonts.googleapis.com" in url and "/css" in url:
+        if self._is_google_fonts_css(url):
             return "CSS"
         
         if path.endswith('.html') or path.endswith('.htm') or not os.path.splitext(path)[1]:
@@ -1081,7 +1087,7 @@ class WaybackDownloader:
             # These are relative to fonts.gstatic.com, not the site's domain
             if url_part.startswith("/") and not url_part.startswith("//"):
                 # Check if this is a Google Fonts CSS file (base_url contains fonts.googleapis.com)
-                if "fonts.googleapis.com" in base_url:
+                if _host_matches(base_url, self.GOOGLE_FONTS_CSS_HOSTS):
                     # Convert to full Google Fonts URL
                     url_part = f"https://fonts.gstatic.com{url_part}"
                 else:
@@ -1093,7 +1099,7 @@ class WaybackDownloader:
             
             # Handle fonts.gstatic.com URLs - these need to be converted to local paths
             # to avoid CORS issues when loading from localhost
-            is_google_font = "fonts.gstatic.com" in normalized or "fonts.googleapis.com" in normalized
+            is_google_font = _host_matches(normalized, self.GOOGLE_FONT_HOSTS)
             is_squarespace_cdn = self._is_squarespace_cdn(normalized)
             if self._is_internal_url(normalized) or is_google_font or is_squarespace_cdn:
                 # @import names a stylesheet; a bare url() names an asset, and
@@ -1764,7 +1770,7 @@ class WaybackDownloader:
             if not self._is_internal_url(normalized_url):
                 # Check if this is a Google Fonts CSS file available on Wayback Machine
                 # The original_href might be a wayback path like //web.archive.org/web/...cs_/http://fonts.googleapis.com/...
-                is_google_font = "fonts.googleapis.com" in normalized_url or "fonts.googleapis.com" in original_href
+                is_google_font = _host_matches(normalized_url, self.GOOGLE_FONTS_CSS_HOSTS) or _host_matches(original_href, self.GOOGLE_FONTS_CSS_HOSTS)
                 is_squarespace_cdn = self._is_squarespace_cdn(normalized_url) or self._is_squarespace_cdn(original_href)
                 
                 if is_google_font or is_squarespace_cdn:
@@ -1772,7 +1778,7 @@ class WaybackDownloader:
                     original_resource_url = self._extract_original_url_from_path(original_href)
                     if not original_resource_url:
                         # If extraction failed, try using the already-extracted href
-                        original_resource_url = href if (is_google_font and "fonts.googleapis.com" in href) or (is_squarespace_cdn and self._is_squarespace_cdn(href)) else None
+                        original_resource_url = href if (is_google_font and _host_matches(href, self.GOOGLE_FONTS_CSS_HOSTS)) or (is_squarespace_cdn and self._is_squarespace_cdn(href)) else None
                     if original_resource_url:
                         # Normalize for tracking (remove query strings for visited check)
                         parsed_resource = urlparse(original_resource_url)
@@ -2114,7 +2120,7 @@ class WaybackDownloader:
                 
                 # Better content type detection from URL path
                 # Check for Google Fonts CSS files first (they don't have .css extension)
-                if "fonts.googleapis.com" in url and "/css" in url:
+                if self._is_google_fonts_css(url):
                     content_type = "text/css"
                 elif not content_type:
                     path_lower = parsed.path.lower()
@@ -2162,7 +2168,7 @@ class WaybackDownloader:
             # Use normalized URL (without query strings) for file paths
             # Exception: For Google Fonts CSS files, preserve query string in path for uniqueness
             try:
-                if "fonts.googleapis.com" in url and "/css" in url:
+                if self._is_google_fonts_css(url):
                     # For Google Fonts CSS, use query string hash to create unique filename
                     import hashlib
                     parsed_original = urlparse(url)
@@ -2193,7 +2199,7 @@ class WaybackDownloader:
 
             try:
                 # Check for Google Fonts CSS files first (they don't have .css extension)
-                is_google_fonts_css = "fonts.googleapis.com" in url and "/css" in url
+                is_google_fonts_css = self._is_google_fonts_css(url)
                 
                 # Process based on content type - be more conservative about what we treat as HTML
                 is_html = (

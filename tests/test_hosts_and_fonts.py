@@ -480,3 +480,75 @@ class TestFontProbe:
         assert not any(
             "example.com/fonts.gstatic.com" in url for url, _ in dl.session.calls
         )
+
+
+class TestGoogleFontsIsAHostMatch:
+    """Only a URL on a Google Fonts host is handled as Google Fonts.
+
+    The checks used to look for "fonts.googleapis.com" anywhere in the URL, so
+    a foreign stylesheet whose query mentioned it was fetched and saved as
+    fonts.googleapis.com/css-<hash>.css.
+    """
+
+    def _run(self, tmp_path, page):
+        output_dir = tmp_path / "out"
+        dl = _make_downloader(output_dir=output_dir)
+        dl.session = _FakeSession({"http://example.com/": page})
+        with contextlib.redirect_stdout(io.StringIO()):
+            dl.download()
+        files = {str(p.relative_to(output_dir)) for p in output_dir.rglob("*") if p.is_file()}
+        return dl.session, files
+
+    @pytest.mark.parametrize(
+        "href",
+        [
+            "http://evil.test/a.css?fonts.googleapis.com/css",
+            "http://fonts.googleapis.com.evil.test/css?family=X",
+        ],
+    )
+    def test_foreign_stylesheet_is_not_queued_as_google_fonts(self, tmp_path, href):
+        page = (
+            b'<html><head><link rel="stylesheet" href="' + href.encode() + b'">'
+            b"</head><body></body></html>"
+        )
+        session, files = self._run(tmp_path, page)
+        assert not any("evil.test" in url for url, _ in session.calls)
+        assert not any(f.startswith("fonts.googleapis.com") for f in files)
+
+    def test_site_stylesheet_mentioning_google_fonts_keeps_its_own_fonts(self):
+        dl = _make_downloader()
+        css = dl._rewrite_css_urls(
+            "a{src:url(/s/x.woff2)}", "http://example.com/s.css?fonts.googleapis.com"
+        )
+        assert "fonts.gstatic.com" not in css
+
+    def test_foreign_url_mentioning_gstatic_is_not_made_local(self):
+        dl = _make_downloader()
+        css = dl._rewrite_css_urls(
+            "a{background:url(http://evil.test/a.png?fonts.gstatic.com)}",
+            "http://example.com/s.css",
+        )
+        assert "http://evil.test/a.png" in css
+
+    @pytest.mark.parametrize(
+        "href",
+        [
+            "https://fonts.googleapis.com/css?family=Roboto",
+            "/web/20200101000000cs_/https://fonts.googleapis.com/css2?family=Roboto",
+        ],
+    )
+    def test_missing_google_fonts_stylesheet_is_fetched_live(self, tmp_path, href):
+        """The stylesheet has no extension, so it was taken for a page, and a
+        page is never fetched live."""
+        page = (
+            b'<html><head><link rel="stylesheet" href="' + href.encode() + b'">'
+            b"</head><body></body></html>"
+        )
+        session, files = self._run(tmp_path, page)
+        live = [url for url, _ in session.live_calls()]
+        assert live == [href[href.index("https://"):]]
+        assert any(
+            f.startswith("fonts.googleapis.com/css-") and f.endswith(".css") for f in files
+        )
+        assert not any("if_/https://fonts.googleapis.com" in url for url, _ in session.calls)
+
