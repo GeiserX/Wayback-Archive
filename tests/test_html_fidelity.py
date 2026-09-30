@@ -226,3 +226,43 @@ class TestSrcset:
         assert "w_400,c_fill/a.jpg 400w" in srcset
         assert "w_800,c_fill/a.jpg 800w" in srcset
         assert not any(link.endswith("c_fill/a.jpg") and "cloudinary" not in link for link in links)
+
+
+class TestAnchors:
+    """Links keep their fragments, script links and markup."""
+
+    def test_fragments_survive(self):
+        dl = _make_dl()
+        soup, links = _process(dl, (
+            '<html><body><a href="#myCarousel" data-slide="prev">p</a><a href="#">t</a>'
+            f'<a href="{W}/https://site.com/about#team">a</a></body></html>'
+        ), page="https://site.com/blog/post")
+        assert [a["href"] for a in soup.find_all("a")] == ["#myCarousel", "#", "../about.html#team"]
+        assert links == ["https://site.com/about"]
+
+    def test_javascript_links_are_left_alone(self):
+        dl = _make_dl()
+        soup, _ = _process(dl, (
+            '<html><body><a href="javascript:void(0)" onclick="openMenu()" class="menu-toggle">'
+            '<span class="icon"></span> Menu</a><a href="javascript:window.print()">Print</a></body></html>'
+        ))
+        anchors = soup.find_all("a")
+        assert [a["href"] for a in anchors] == ["javascript:void(0)", "javascript:window.print()"]
+        assert anchors[0]["onclick"] == "openMenu()"
+        assert anchors[0].find("span", class_="icon") is not None
+
+    def test_flattened_external_link_keeps_its_children(self):
+        dl = _make_dl()
+        soup, links = _process(dl, (
+            f'<html><body><a href="{W}/https://partner.org/"><img src="{W}im_/https://site.com/logo-partner.png"></a>'
+            f'<a href="{W}/https://x.org/"><strong>Bold</strong> text</a></body></html>'
+        ))
+        assert soup.find("a") is None
+        assert soup.img["src"] == "logo-partner.png"
+        assert "https://site.com/logo-partner.png" in links
+        assert "<strong>Bold</strong> text" in str(soup)
+
+    def test_kept_external_link_loses_its_wayback_prefix(self):
+        dl = _make_dl(REMOVE_EXTERNAL_LINKS_KEEP_ANCHORS="false")
+        soup, _ = _process(dl, f'<html><body><a href="{W}/https://twitter.com/site">t</a></body></html>')
+        assert soup.a["href"] == "https://twitter.com/site"

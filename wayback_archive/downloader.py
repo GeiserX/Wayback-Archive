@@ -1790,6 +1790,9 @@ class WaybackDownloader:
             href = link.get("href", "")
             if not href:
                 continue
+            # A same-page fragment or a script link names no other page.
+            if href.startswith("#") or href.strip().lower().startswith(("javascript:", "data:", "blob:", "about:")):
+                continue
             
             # Check if this link is inside a floating buttons container BEFORE processing
             is_floating_button = False
@@ -1952,21 +1955,23 @@ class WaybackDownloader:
                 if self.config.remove_external_links_remove_anchors:
                     link.decompose()
                 elif self.config.remove_external_links_keep_anchors:
-                    link["href"] = "#"
-                    # Keep the text but remove link
-                    text = link.get_text()
-                    link.replace_with(text)
+                    # Drop the link but keep what it wrapped: text, images, markup
+                    link.unwrap()
+                else:
+                    link["href"] = original_url
                 continue
 
             # Process internal links - normalize for final HTML output
             normalized_url = self._normalize_url(original_url, base_url)
+            # Normalizing drops the fragment; the link keeps it.
+            fragment = "#" + parsed_original.fragment if parsed_original.fragment else ""
             if self.config.make_internal_links_relative:
                 # Use _get_relative_link_path to ensure links match saved file paths
                 relative_path = self._get_relative_link_path(normalized_url, "page")
-                link["href"] = relative_path
+                link["href"] = relative_path + fragment
             else:
                 if self.config.make_non_www or self.config.make_www:
-                    link["href"] = normalized_url
+                    link["href"] = normalized_url + fragment
 
             # Add to links to follow - use original URL with query strings for downloading
             # Track by normalized URL to avoid downloading same file multiple times

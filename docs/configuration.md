@@ -36,7 +36,7 @@ All options are set via environment variables. You can also put them in a `.env`
 
 | Variable | Default | Description |
 |---|---|---|
-| `REMOVE_EXTERNAL_LINKS_KEEP_ANCHORS` | `true` | Remove external links, keep anchor text |
+| `REMOVE_EXTERNAL_LINKS_KEEP_ANCHORS` | `true` | Remove external links, keep what they wrap (text, images, markup) |
 | `REMOVE_EXTERNAL_LINKS_REMOVE_ANCHORS` | `false` | Remove external links and anchor elements |
 | `MAKE_INTERNAL_LINKS_RELATIVE` | `true` | Convert internal links to relative paths |
 
