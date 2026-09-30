@@ -18,8 +18,24 @@ class UnsafeOutputPathError(ValueError):
     """Raised when a downloaded URL would be written outside OUTPUT_DIR."""
 
 
+def _host_matches(url: str, hosts) -> bool:
+    """True when the URL's host is one of hosts or a subdomain of one.
+
+    A URL with userinfo never matches: "trusted.host@elsewhere" connects to
+    the host after the "@".
+    """
+    parsed = urlparse(url)
+    if "@" in parsed.netloc:
+        return False
+    host = (parsed.hostname or "").lower()
+    return any(host == h or host.endswith("." + h) for h in hosts)
+
+
 class WaybackDownloader:
     """Main downloader class for Wayback Machine archives."""
+
+    # Google Fonts hosts: the stylesheet host and the font file host.
+    GOOGLE_FONT_HOSTS = ("fonts.googleapis.com", "fonts.gstatic.com")
 
     # Common tracker/analytics patterns
     TRACKER_PATTERNS = [
@@ -143,8 +159,10 @@ class WaybackDownloader:
         if parsed.scheme and parsed.scheme.lower() not in ('http', 'https', ''):
             return False
         
-        url_domain = parsed.netloc.lower().lstrip("www.")
-        base_domain = self.config.domain.lower().lstrip("www.")
+        if "@" in parsed.netloc:
+            return False
+        url_domain = parsed.netloc.lower().removeprefix("www.")
+        base_domain = self.config.domain.lower().removeprefix("www.")
 
         # Treat Squarespace CDN as internal so we rewrite and download those assets.
         if self._is_squarespace_cdn(url):
@@ -161,9 +179,7 @@ class WaybackDownloader:
             'definitions.sqspcdn.com',
             'sqspcdn.com'
         ]
-        parsed = urlparse(url)
-        url_domain = parsed.netloc.lower().lstrip("www.")
-        return any(domain in url_domain for domain in squarespace_domains)
+        return _host_matches(url, squarespace_domains)
 
     @staticmethod
     def _is_html_url(url: str, parsed=None) -> bool:
@@ -235,7 +251,12 @@ class WaybackDownloader:
             timestamp: Optional timestamp (YYYYMMDDHHMMSS). If None, uses original timestamp.
             use_iframe: If True, use 'if_' prefix to get unwrapped HTML content (no Wayback interface)
         """
-        if url.startswith("http://web.archive.org") or url.startswith("https://web.archive.org"):
+        parsed = urlparse(url)
+        if (
+            parsed.scheme in ("http", "https")
+            and parsed.hostname == "web.archive.org"
+            and "@" not in parsed.netloc
+        ):
             return url
         
         if timestamp is None:
@@ -246,7 +267,6 @@ class WaybackDownloader:
             return f"https://web.archive.org/web/{timestamp}if_/{url}"
         
         # Determine asset type prefix (im_, cs_, js_)
-        parsed = urlparse(url)
         path = parsed.path.lower()
         asset_prefix = ""
 
@@ -344,8 +364,8 @@ class WaybackDownloader:
         
         # For internal URLs, preserve the scheme from base_url to ensure consistency
         # This prevents http:// URLs from being converted to https://
-        url_domain = parsed.netloc.lower().lstrip("www.")
-        base_domain = parsed_base.netloc.lower().lstrip("www.")
+        url_domain = parsed.netloc.lower().removeprefix("www.")
+        base_domain = parsed_base.netloc.lower().removeprefix("www.")
         if url_domain == base_domain or url_domain == "":
             # Internal URL - use base_url scheme
             if parsed_base.scheme and parsed.scheme != parsed_base.scheme:
@@ -2014,7 +2034,7 @@ class WaybackDownloader:
         # Convert any remaining domain references in text content and attributes to relative paths
         # This handles cases where domain URLs appear in href, src, or other attributes
         parsed_base = urlparse(base_url)
-        base_domain = parsed_base.netloc.lower().lstrip("www.")
+        base_domain = parsed_base.netloc.lower().removeprefix("www.")
         
         for element in soup.find_all(True):  # All elements
             for attr_name, attr_value in list(element.attrs.items()):
@@ -2089,7 +2109,7 @@ class WaybackDownloader:
             # Normalize URL for tracking (remove query strings to avoid downloading same file twice)
             parsed_url = urlparse(url)
             # Normalize www/non-www to avoid downloading same page twice
-            netloc_normalized = parsed_url.netloc.lower().lstrip("www.")
+            netloc_normalized = parsed_url.netloc.lower().removeprefix("www.")
             parsed_normalized = parsed_url._replace(netloc=netloc_normalized, fragment="", query="")
             normalized_for_tracking = parsed_normalized.geturl()
 
@@ -2311,7 +2331,7 @@ class WaybackDownloader:
                             normalized_css = parsed_css._replace(fragment="", query="").geturl()
                             # Handle fonts.gstatic.com URLs - these are external but available on Wayback Machine
                             # They need to be downloaded to avoid CORS issues
-                            is_google_font = "fonts.gstatic.com" in css_url or "fonts.googleapis.com" in css_url
+                            is_google_font = _host_matches(css_url, self.GOOGLE_FONT_HOSTS)
                             is_squarespace_cdn = self._is_squarespace_cdn(css_url)
                             if normalized_css not in self.config.visited_urls and (self._is_internal_url(css_url) or is_google_font or is_squarespace_cdn):
                                 # Check if already in queue
