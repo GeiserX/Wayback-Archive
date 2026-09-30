@@ -652,3 +652,23 @@ class TestJqueryReplacement:
         assert live == [f"https://code.jquery.com/jquery-{v}.min.js" for v in tried]
         saved = [p for p in (tmp_path / "out").rglob("jquery.min.js")]
         assert len(saved) == 1 and saved[0].read_bytes().startswith(b"/*! jQuery */")
+
+
+class TestCdxOutageIsNotReportedAsNoCapture:
+    """A CDX outage and "no good capture exists" are different answers."""
+
+    def test_outage_says_the_index_did_not_answer(self, capsys):
+        dl = _make_downloader()
+        dl.session.get = _Recorder(_BadCaptureWayback(_Response(403, b"x", headers=ARCHIVED), lambda kwargs: _Response(503, b"<html>Temporarily Offline")))
+        assert dl.download_file("https://example.com/") is None
+        out = capsys.readouterr().out
+        assert "CDX index did not answer" in out
+        assert "No good capture found" not in out
+
+    def test_empty_answer_says_no_good_capture(self, capsys):
+        dl = _make_downloader()
+        dl.session.get = _Recorder(_BadCaptureWayback(_Response(403, b"x", headers=ARCHIVED), lambda kwargs: _cdx_rows()))
+        assert dl.download_file("https://example.com/") is None
+        out = capsys.readouterr().out
+        assert "No good capture found" in out
+        assert "CDX index did not answer" not in out
