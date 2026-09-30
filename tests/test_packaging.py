@@ -40,3 +40,21 @@ def test_pytest_settings_are_loaded(pytestconfig):
     # a file under config/ is silently ignored.
     assert pytestconfig.inipath == ROOT / "pyproject.toml"
     assert pytestconfig.getini("testpaths") == ["tests"]
+
+
+def test_ci_gates_can_fail():
+    # A step that swallows its own exit code reports green on any result.
+    for fake in ("|| true", "--exit-zero", "continue-on-error"):
+        assert fake not in CI
+
+
+def test_codecov_gets_the_input_it_reads():
+    # codecov-action v4+ reads `files`; `file` is ignored with a warning.
+    assert re.search(r"^\s+files: \./coverage\.xml$", CI, re.MULTILINE)
+    assert not re.search(r"^\s+file:", CI, re.MULTILINE)
+
+
+def test_ci_installs_the_built_wheel_outside_the_checkout():
+    assert "python -m build" in CI
+    assert "pip install dist/*.whl" in CI
+    assert "'site-packages' in" in CI

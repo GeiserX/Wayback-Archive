@@ -38,27 +38,36 @@ jobs:
         pip install -r config/requirements.txt
         pip install -r config/requirements-dev.txt
 
+    # Syntax errors and undefined names only. mypy and black used to run here
+    # with their exit code discarded, so they could never fail; they come back
+    # when the code passes them.
     - name: Lint with flake8
       run: |
         flake8 wayback_archive tests --count --select=E9,F63,F7,F82 --show-source --statistics
-        flake8 wayback_archive tests --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
-
-    - name: Type check with mypy
-      run: |
-        mypy wayback_archive --ignore-missing-imports || true
-
-    - name: Format check with black
-      run: |
-        black --check wayback_archive tests || true
 
     - name: Test with pytest
       run: |
         pytest tests/ -v --cov=wayback_archive --cov-report=xml --cov-report=html
 
+    # Run from outside the checkout and assert where the import came from:
+    # python puts the working directory ahead of site-packages, so importing
+    # from the repo root would pass on an empty wheel.
+    - name: Build and install the wheel
+      run: |
+        pip install build
+        python -m build
+        python -m venv /tmp/wheel-check
+        /tmp/wheel-check/bin/pip install dist/*.whl
+        cd /tmp
+        /tmp/wheel-check/bin/python -c "import os, wayback_archive, wayback_archive.downloader; p = os.path.dirname(wayback_archive.__file__); assert 'site-packages' in p, p; print('wheel ok', wayback_archive.__version__, p)"
+        # The console script is installed: with no WAYBACK_URL it exits 1 naming it.
+        if /tmp/wheel-check/bin/wayback-archive > cli.out 2>&1; then cat cli.out; exit 1; fi
+        grep WAYBACK_URL cli.out
+
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v7
       with:
-        file: ./coverage.xml
+        files: ./coverage.xml
         flags: unittests
         name: codecov-umbrella
         fail_ci_if_error: false
