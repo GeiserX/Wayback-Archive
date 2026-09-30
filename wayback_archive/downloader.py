@@ -1506,10 +1506,9 @@ class WaybackDownloader:
         for pattern in patterns:
             for match in re.finditer(pattern, js):
                 js_url = match.group(1).strip()
-                # Skip if it looks like code, not a URL
-                if any(skip in js_url for skip in ["function", "return", "if", "else", "var ", "let ", "const "]):
-                    continue
-                if not js_url.startswith(("data:", "javascript:", "vbscript:", "#", "mailto:", "tel:", "//", "http", "https")):
+                # Skip if it looks like code, not a URL. A word test ("if")
+                # threw away every .gif; code has spaces or punctuation.
+                if re.search(r"[\s{}();<>]", js_url):
                     continue
                 if not js_url.startswith(("http://", "https://", "/")):
                     continue

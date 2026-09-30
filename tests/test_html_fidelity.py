@@ -408,3 +408,19 @@ class TestGoogleFontsInsideStylesheets:
         for url in dl._extract_css_urls(css, "https://site.com/css/style.css")[:3]:
             assert dl._make_relative_path(url, "stylesheet") in imports
         assert "url(../fonts.gstatic.com/s/x/v1/a.woff2)" in out
+
+
+class TestJsUrlExtraction:
+    """Root-relative URLs and names containing "if" (.gif, life) are URLs."""
+
+    @pytest.mark.parametrize("js,expected", [
+        ('a.src="/images/loading.gif"', ["https://site.com/images/loading.gif"]),
+        ('fetch("/api/data.json")', ["https://site.com/api/data.json"]),
+        ('y.src="https://site.com/img/spinner.gif"', ["https://site.com/img/spinner.gif"]),
+        ('y.src="https://site.com/img/life.png"', ["https://site.com/img/life.png"]),
+        ('y.src="function(){return 1}"', []),
+        ('y.href="/a b"', []),
+        ('y.src="https://other.com/x.png"', []),
+    ])
+    def test_extract(self, js, expected):
+        assert _make_dl()._extract_js_urls(js, "https://site.com/js/a.js") == expected
