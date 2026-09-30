@@ -5,14 +5,15 @@
 - **Full website download** -- HTML, CSS, JS, images, fonts, and all linked assets
 - **Recursive link discovery** -- Automatically follows links in HTML, CSS, and JS files
 - **Smart URL rewriting** -- Converts all links to relative paths for local serving
-- **Timeframe fallback** -- Searches nearby Wayback Machine timestamps when a resource returns 404
+- **Timeframe fallback** -- Tries up to three other Wayback Machine timestamps (a day either side and a week earlier) when a resource returns 404
+- **Bad capture fallback** -- When a capture is an archived error (403, 5xx) or a Cloudflare challenge page, uses the nearest capture with status 200 instead, found with one query to the Wayback CDX index
 - **Real-time progress logging** -- Displays download status and file processing as it happens
 
 ## Asset Handling
 
 - **Google Fonts support** -- Downloads Google Fonts CSS and font files locally, fixing CORS issues
 - **Font corruption detection** -- Identifies and removes corrupted font files (HTML error pages served as fonts)
-- **CDN fallback** -- When the Wayback Machine lacks a file hosted on Google Fonts, `code.jquery.com` or the Squarespace CDN, fetches it from that CDN; a missing `jquery.min.js` is replaced with jQuery 3.7.1 from `code.jquery.com`. Nothing else is fetched live (see [How it works](how-it-works.md#where-requests-go))
+- **CDN fallback** -- When the Wayback Machine lacks a file hosted on Google Fonts, `code.jquery.com` or the Squarespace CDN, fetches it from that CDN; a missing `jquery.min.js` is replaced from `code.jquery.com` with the version its URL names (`jquery-1.7.2/`, `?ver=3.6.0`; `1.9` is also tried as `1.9.0`), or 3.7.1 when it names none or `code.jquery.com` does not have that version (a WordPress `?ver=` is often WordPress's own version). Nothing else is fetched live (see [How it works](how-it-works.md#where-requests-go))
 - **Data attribute processing** -- Processes `data-*` attributes containing URLs (videos, images, etc.)
 
 ## Preservation

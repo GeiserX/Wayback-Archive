@@ -72,7 +72,7 @@ class TestParseWaybackUrl:
         """Invalid Wayback URL format raises ValueError."""
         os.environ["WAYBACK_URL"] = "http://not-wayback.com/page"
         config = Config()
-        with pytest.raises(ValueError, match="Invalid Wayback URL"):
+        with pytest.raises(ValueError, match="WAYBACK_URL must look like"):
             WaybackDownloader(config)
 
     def test_unparseable_timestamp_fallback(self):
@@ -523,10 +523,10 @@ class TestToRelativePath:
 
 
 # ===================================================================
-# _generate_timestamp_variants
+# _fallback_timestamps
 # ===================================================================
 
-class TestGenerateTimestampVariants:
+class TestFallbackTimestamps:
 
     def setup_method(self):
         self.dl = _make_downloader()
@@ -534,22 +534,19 @@ class TestGenerateTimestampVariants:
     def teardown_method(self):
         _cleanup_env("WAYBACK_URL")
 
-    def test_generates_variants(self):
-        variants = self.dl._generate_timestamp_variants(hours_range=6, step_hours=2)
-        assert len(variants) > 0
+    def test_generates_at_most_three(self):
+        variants = self.dl._fallback_timestamps()
+        assert 0 < len(variants) <= 3
         assert all(len(v) == 14 for v in variants)
 
-    def test_sorted_by_proximity(self):
-        variants = self.dl._generate_timestamp_variants(hours_range=12, step_hours=1)
-        # First variant should be closer to original than last
-        base_time = self.dl.original_datetime
-        diffs = [abs((datetime.strptime(ts, '%Y%m%d%H%M%S') - base_time).total_seconds()) for ts in variants]
-        assert diffs == sorted(diffs)
+    def test_distinct(self):
+        variants = self.dl._fallback_timestamps()
+        assert len(set(variants)) == len(variants)
 
     def test_excludes_original(self):
         """Variant list should not include the exact original timestamp."""
         original_ts = self.dl.original_datetime.strftime('%Y%m%d%H%M%S')
-        variants = self.dl._generate_timestamp_variants(hours_range=2, step_hours=1)
+        variants = self.dl._fallback_timestamps()
         assert original_ts not in variants
 
 
@@ -1456,9 +1453,11 @@ class TestDownloadMain:
 
     def test_download_creates_output_dir(self, tmp_path):
         """download() creates the output directory."""
-        dl = self._make_dl(tmp_path)
-        dl.config.max_files = 0  # stop immediately
-        dl.download()
+        dl = self._make_dl(tmp_path / "new")
+        dl.download_file = Mock(return_value=None)  # no network
+        with pytest.raises(RuntimeError, match="Nothing was saved"):
+            dl.download()
+        assert (tmp_path / "new").is_dir()
 
     def test_download_respects_max_files(self, tmp_path):
         """download() stops when max_files is reached."""
@@ -1474,7 +1473,8 @@ class TestDownloadMain:
         dl = self._make_dl(tmp_path)
         dl.config.max_files = 1
         dl.download_file = Mock(return_value=None)
-        dl.download()
+        with pytest.raises(RuntimeError, match="Nothing was saved"):
+            dl.download()
 
     def test_download_processes_css_file(self, tmp_path):
         """CSS files should be processed and their URLs extracted."""
@@ -1626,6 +1626,8 @@ class TestConfigAdditional:
         os.environ["MAX_FILES"] = "abc"
         config = Config()
         assert config.max_files is None
+        # Junk used to mean unlimited; it is now a configuration error.
+        assert config.validate()[0] is False
 
     def test_max_files_empty(self):
         os.environ["WAYBACK_URL"] = "https://web.archive.org/web/20250417203037/http://example.com/"

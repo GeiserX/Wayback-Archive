@@ -12,6 +12,9 @@ from urllib.parse import urljoin, urlparse, unquote, quote
 from pathlib import Path
 from typing import Optional, Set, Dict, List, Tuple
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.exceptions import MaxRetryError
+from urllib3.util.retry import Retry
 from bs4 import BeautifulSoup, Comment
 from bs4.dammit import EncodingDetector
 from wayback_archive.config import Config
@@ -32,6 +35,25 @@ def _host_matches(url: str, hosts) -> bool:
         return False
     host = (parsed.hostname or "").lower()
     return any(host == h or host.endswith("." + h) for h in hosts)
+
+
+class _PoliteRetry(Retry):
+    """Waits out a 429 as Retry-After asks, but never longer than RETRY_AFTER_MAX."""
+
+    RETRY_AFTER_MAX = 30
+    # urllib3 also retries a 503 or 413 that carries Retry-After by default.
+    RETRY_AFTER_STATUS_CODES = frozenset({429})
+
+    def get_retry_after(self, response):
+        retry_after = super().get_retry_after(response)
+        return None if retry_after is None else min(retry_after, self.RETRY_AFTER_MAX)
+
+    def increment(self, method=None, url=None, response=None, error=None, _pool=None, _stacktrace=None):
+        # A 429 with memento-datetime is an archived capture, not throttling;
+        # MaxRetryError makes urllib3 hand it back without retrying.
+        if response is not None and response.headers.get("memento-datetime"):
+            raise MaxRetryError(_pool, url, "archived capture")
+        return super().increment(method, url, response, error, _pool, _stacktrace)
 
 
 class WaybackDownloader:
@@ -129,6 +151,16 @@ class WaybackDownloader:
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
             }
         )
+        # Wayback throttles with 429: wait and retry a few times. A 5xx, or
+        # an archived 429, is not retried, since Wayback replays archived
+        # error captures as such.
+        self.session.mount("https://web.archive.org/", HTTPAdapter(max_retries=_PoliteRetry(
+            total=3, connect=0, read=0, other=0, status_forcelist=[429],
+            backoff_factor=2, respect_retry_after_header=True, raise_on_status=False,
+        )))
+        # Why the last download_file call failed when Wayback refused it:
+        # "throttled" (429) or "connection" (no answer); None otherwise.
+        self._last_failure: Optional[str] = None
         # Track corrupted font files (HTML error pages instead of actual fonts)
         self.corrupted_fonts: Set[str] = set()
         # Font URLs already probed this run, so each is fetched at most once
@@ -142,6 +174,12 @@ class WaybackDownloader:
         self._kind_by_path: Dict[str, str] = {}
         # Charset named by the last response download_file read.
         self._last_charset: Optional[str] = None
+        # The URL that response finally came from, after redirects.
+        self._last_final_url: Optional[str] = None
+        # CDX lookups for bad captures: how many this run, and how many
+        # failed in a row. CDX is slow and often down, so both are capped.
+        self._cdx_lookups = 0
+        self._cdx_failures = 0
         self._parse_wayback_url()
 
     def _parse_wayback_url(self):
@@ -182,7 +220,10 @@ class WaybackDownloader:
                 # the latest capture, so search around now.
                 self.original_datetime = datetime.now()
         else:
-            raise ValueError(f"Invalid Wayback URL format: {self.config.wayback_url}")
+            raise ValueError(
+                "WAYBACK_URL must look like https://web.archive.org/web/<timestamp>/<url>, "
+                f"got: {self.config.wayback_url}"
+            )
 
     @staticmethod
     def _strip_default_port(netloc: str, scheme: str) -> str:
@@ -725,31 +766,109 @@ class WaybackDownloader:
             from_dir = posixpath.dirname(from_path)
         return posixpath.relpath(abs_path, from_dir or "/")
 
-    def _generate_timestamp_variants(self, hours_range: int = 24, step_hours: int = 1) -> List[str]:
-        """Generate timestamp variants for timeframe search.
-        
-        Args:
-            hours_range: How many hours before/after to search
-            step_hours: Step size in hours between attempts
-            
-        Returns:
-            List of timestamp strings (YYYYMMDDHHMMSS format)
+    # Offsets, in hours, of the other timestamps tried after a 404. Wayback
+    # already answers any timestamp with the nearest capture, so a nearby
+    # probe lands on the same answer; only a probe far enough away to have a
+    # different nearest capture can find the file.
+    FALLBACK_OFFSETS_HOURS = (-24, 24, -168)
+
+    def _fallback_timestamps(self) -> List[str]:
+        """The distinct timestamps to try after a 404, closest first."""
+        timestamps = (
+            (self.original_datetime + timedelta(hours=hours)).strftime('%Y%m%d%H%M%S')
+            for hours in self.FALLBACK_OFFSETS_HOURS
+        )
+        return list(dict.fromkeys(timestamps))
+
+    CDX_URL = "https://web.archive.org/cdx/search/cdx"
+    CDX_MAX_LOOKUPS = 25
+    CDX_MAX_CONSECUTIVE_FAILURES = 3
+    # Only the exact titles: Cloudflare injects challenge-platform scripts
+    # into normal pages too.
+    CHALLENGE_TITLES = (
+        b"<title>Just a moment...</title>",
+        b"<title>Attention Required! | Cloudflare</title>",
+    )
+
+    def _bad_capture_reason(self, response) -> Optional[str]:
+        """Why an archived answer is not the page, or None when it is.
+
+        Wayback replays an archived 403 or 5xx with that status and a
+        memento-datetime header; its own errors carry no such header, and a
+        404 has its own search.
         """
-        timestamps = []
-        base_time = self.original_datetime
-        
-        # Try timestamps before and after the original
-        for hours_offset in range(-hours_range, hours_range + 1, step_hours):
-            if hours_offset == 0:
-                continue  # Skip the original timestamp (already tried)
-            variant_time = base_time + timedelta(hours=hours_offset)
-            timestamp_str = variant_time.strftime('%Y%m%d%H%M%S')
-            timestamps.append(timestamp_str)
-        
-        # Sort by proximity to original (closest first)
-        timestamps.sort(key=lambda ts: abs((datetime.strptime(ts, '%Y%m%d%H%M%S') - base_time).total_seconds()))
-        
-        return timestamps
+        status = response.status_code
+        if status >= 400 and status != 404 and response.headers.get("memento-datetime"):
+            return f"archived HTTP {status}"
+        if status == 200 and any(title in response.content[:16384] for title in self.CHALLENGE_TITLES):
+            return "Cloudflare challenge page"
+        return None
+
+    def _nearest_good_timestamp(self, url: str, bad_timestamp: str) -> Optional[str]:
+        """The timestamp of the capture of url with status 200 closest to the
+        requested one, other than bad_timestamp, from one CDX query; None when
+        there is none or CDX does not answer."""
+        if (
+            self._cdx_lookups >= self.CDX_MAX_LOOKUPS
+            or self._cdx_failures >= self.CDX_MAX_CONSECUTIVE_FAILURES
+        ):
+            return None
+        self._cdx_lookups += 1
+        try:
+            response = self.session.get(
+                self.CDX_URL,
+                params={
+                    "url": url,
+                    "output": "json",
+                    "fl": "timestamp",
+                    "filter": "statuscode:200",
+                    "closest": self.original_datetime.strftime('%Y%m%d%H%M%S'),
+                    "sort": "closest",
+                    # A challenge archived as 200 passes the filter, so the
+                    # closest row can be the bad capture itself.
+                    "limit": "5",
+                },
+                timeout=30,
+            )
+            if response.status_code != 200:
+                raise ValueError(f"CDX answered HTTP {response.status_code}")
+            rows = response.json()
+        except Exception:
+            self._cdx_failures += 1
+            print("         ⚠️  The Wayback CDX index did not answer, so no other capture could be looked up", flush=True)
+            if self._cdx_failures == self.CDX_MAX_CONSECUTIVE_FAILURES:
+                print("         ⚠️  The Wayback CDX index is not answering; no more capture lookups this run", flush=True)
+            return None
+        self._cdx_failures = 0
+        for row in rows[1:]:
+            if row and str(row[0]) != bad_timestamp:
+                return str(row[0])
+        print("         ⚠️  No good capture found", flush=True)
+        return None
+
+    def _fetch_nearest_good_capture(self, url: str, reason: str, is_html_page: bool, bad_response) -> Optional[bytes]:
+        """Replace a bad capture of url with the nearest good one, if any."""
+        print(f"         ⚠️  Capture is {reason}; looking for the nearest good one", flush=True)
+        # The capture Wayback served, which can differ from the one asked for.
+        served = re.search(r"/web/(\d{14})", bad_response.url or "")
+        bad_timestamp = served.group(1) if served else self.original_datetime.strftime('%Y%m%d%H%M%S')
+        timestamp = self._nearest_good_timestamp(url, bad_timestamp)
+        if not timestamp:
+            return None
+        fallback_url = self._convert_to_wayback_url_with_timestamp(url, timestamp, use_iframe=is_html_page)
+        try:
+            response = self.session.get(fallback_url, timeout=15, allow_redirects=True)
+        except Exception:
+            return None
+        if response.status_code != 200 or self._bad_capture_reason(response):
+            print(f"         ⚠️  The capture at {timestamp} is not usable either", flush=True)
+            return None
+        if url == self.config.base_url:
+            # Assets resolve around the capture actually used.
+            print(f"         Requested capture is {reason}; using nearest good capture {timestamp}", flush=True)
+            self.original_timestamp = timestamp
+            self.original_datetime = datetime.strptime(timestamp, '%Y%m%d%H%M%S')
+        return self._body_of(response)
 
     def _is_corrupted_font(self, content: bytes, url: str) -> bool:
         """Check if a downloaded font file is actually an HTML error page.
@@ -779,6 +898,7 @@ class WaybackDownloader:
         (LIVE_FALLBACK_HOSTS), tries that CDN live.
         """
         self._last_charset = None
+        self._last_failure = None
         # Determine if this is an HTML page (we should NOT fallback to live for HTML)
         parsed = urlparse(url)
         path_lower = parsed.path.lower()
@@ -799,6 +919,13 @@ class WaybackDownloader:
                 response = self.session.get(
                     wayback_url_if, timeout=15, allow_redirects=True
                 )
+                reason = self._bad_capture_reason(response)
+                if reason:
+                    return self._fetch_nearest_good_capture(url, reason, is_html_page, response)
+                if response.status_code == 429:
+                    # Still throttled after the retries; the plain URL would be too.
+                    self._last_failure = "throttled"
+                    return None
                 response.raise_for_status()
                 content = self._body_of(response)
                 
@@ -820,10 +947,13 @@ class WaybackDownloader:
                         if not is_only_wrapper:
                             # Got content (even if it has Wayback scripts, it has the actual page)
                             return content
-                    except:
+                    except Exception:
                         # If we can't decode, assume it's good
                         return content
-            except:
+            except requests.exceptions.ConnectionError:
+                self._last_failure = "connection"
+                return None
+            except Exception:
                 # If if_ version fails, fall through to regular download
                 pass
         
@@ -833,6 +963,9 @@ class WaybackDownloader:
             response = self.session.get(
                 wayback_url, timeout=15, allow_redirects=True
             )
+            reason = self._bad_capture_reason(response)
+            if reason:
+                return self._fetch_nearest_good_capture(url, reason, is_html_page, response)
             response.raise_for_status()
             content = self._body_of(response)
             
@@ -847,57 +980,40 @@ class WaybackDownloader:
             return content
         except requests.exceptions.HTTPError as e:
             if hasattr(e, 'response') and e.response is not None and e.response.status_code == 404:
-                # File not found at original timestamp, try nearby timestamps
-                # Use progressively wider search ranges with limited attempts
-                for search_range, step, max_attempts in [(12, 2, 5), (48, 6, 5), (168, 24, 3)]:
-                    timestamps = self._generate_timestamp_variants(
-                        hours_range=search_range, step_hours=step
-                    )
-                    
-                    for timestamp in timestamps[:max_attempts]:
-                        try:
-                            # For HTML pages, try if_ version first
-                            if is_html_page:
-                                variant_url = self._convert_to_wayback_url_with_timestamp(url, timestamp, use_iframe=True)
-                                variant_response = self.session.get(
-                                    variant_url, timeout=10, allow_redirects=True
-                                )
-                                if variant_response.status_code == 200:
-                                    content = self._body_of(variant_response)
-                                    # The if_ version should have the actual page content
-                                    # (it may still have Wayback scripts but that's fine)
-                                    # Check if font file is corrupted
-                                    if self._is_corrupted_font(content, url):
-                                        normalized_url = self._normalize_url(url, self.config.base_url)
-                                        self.corrupted_fonts.add(normalized_url)
-                                        print(f"         ⚠️  Font file is corrupted (HTML error page) - will be removed from CSS", flush=True)
-                                        continue  # Try next timestamp
-                                    return content
-                            else:
-                                variant_url = self._convert_to_wayback_url_with_timestamp(url, timestamp)
-                                variant_response = self.session.get(
-                                    variant_url, timeout=10, allow_redirects=True
-                                )
-                                if variant_response.status_code == 200:
-                                    content = self._body_of(variant_response)
-                                    # Check if font file is corrupted
-                                    if self._is_corrupted_font(content, url):
-                                        normalized_url = self._normalize_url(url, self.config.base_url)
-                                        self.corrupted_fonts.add(normalized_url)
-                                        print(f"         ⚠️  Font file is corrupted (HTML error page) - will be removed from CSS", flush=True)
-                                        continue  # Try next timestamp
-                                    return content
-                        except:
-                            continue
-                
+                # File not found at original timestamp, try a few others
+                for timestamp in self._fallback_timestamps():
+                    try:
+                        variant_url = self._convert_to_wayback_url_with_timestamp(
+                            url, timestamp, use_iframe=is_html_page
+                        )
+                        variant_response = self.session.get(
+                            variant_url, timeout=10, allow_redirects=True
+                        )
+                        if variant_response.status_code == 200:
+                            content = self._body_of(variant_response)
+                            if self._is_corrupted_font(content, url):
+                                normalized_url = self._normalize_url(url, self.config.base_url)
+                                self.corrupted_fonts.add(normalized_url)
+                                print(f"         ⚠️  Font file is corrupted (HTML error page) - will be removed from CSS", flush=True)
+                                continue  # Try next timestamp
+                            return content
+                    except Exception:
+                        continue
+
                 # All Wayback attempts failed - try a well-known CDN live (only for assets, not HTML pages)
                 if not is_html_page:
                     return self._fetch_from_live_cdn(url)
+            elif e.response is not None and e.response.status_code == 429:
+                self._last_failure = "throttled"
             # Other HTTP errors - skip silently
-        except requests.exceptions.Timeout:
+        except requests.exceptions.Timeout as e:
+            if isinstance(e, requests.exceptions.ConnectionError):
+                self._last_failure = "connection"
             # Timeout on Wayback - try a well-known CDN live (only for assets)
             if not is_html_page:
                 return self._fetch_from_live_cdn(url)
+        except requests.exceptions.ConnectionError:
+            self._last_failure = "connection"
         except Exception:
             pass
         
@@ -908,6 +1024,7 @@ class WaybackDownloader:
         content_type = str(getattr(response, "headers", {}).get("Content-Type") or "")
         match = re.search(r"charset\s*=\s*[\"']?([\w.:-]+)", content_type, re.IGNORECASE)
         self._last_charset = match.group(1) if match else None
+        self._last_final_url = getattr(response, "url", None)
         return response.content
 
     def _decode_text(self, content: bytes, charset: Optional[str] = None, is_html: bool = False) -> str:
@@ -2184,13 +2301,34 @@ class WaybackDownloader:
             return None
         return parsed._replace(fragment="").geturl()
 
+    MAX_CONSECUTIVE_REFUSALS = 5
+
+    def _follow_start_redirect(self, url: str) -> str:
+        """When the start capture redirected to another host, crawl that host.
+
+        Otherwise every link on the page looks external and the archive is
+        one broken page. Returns the URL the page actually came from.
+        """
+        final = self._extract_original_url_from_path(self._last_final_url or "")
+        if not final:
+            return url
+        parsed = urlparse(final)
+        host = self._strip_default_port(parsed.netloc.lower(), parsed.scheme)
+        if not host or host.removeprefix("www.") == self.config.domain.lower().removeprefix("www."):
+            return url
+        print(f"         ⚠️  The capture of {url} redirects to {final}; archiving {host} instead", flush=True)
+        self.config.base_url = final
+        self.config.domain = host
+        return final
+
     def download(self):
         """Main download method."""
         # Create output directory
         Path(self.config.output_dir).mkdir(parents=True, exist_ok=True)
 
         # Start with the main page
-        queue = [self.config.base_url]
+        start_url = self.config.base_url
+        queue = [start_url]
         # Visited and queued URLs are keyed by the file they are stored as:
         # http/https and www twins, or ?v= cache-busters, are one file and are
         # fetched once, while each Google Fonts family set has its own file.
@@ -2205,6 +2343,10 @@ class WaybackDownloader:
         files_downloaded = 0
         files_failed = 0
         files_skipped = 0
+        # Requests in a row that Wayback throttled or did not answer. Past
+        # MAX_CONSECUTIVE_REFUSALS the run stops rather than hammer it.
+        consecutive_refusals = 0
+        stop_reason = None
 
         print(f"\n{'='*70}", flush=True)
         print(f"Wayback-Archive Downloader", flush=True)
@@ -2216,8 +2358,10 @@ class WaybackDownloader:
         print(f"{'='*70}\n", flush=True)
 
         while queue:
-            # Check if we've reached the file limit (for testing)
-            if self.config.max_files and files_downloaded >= self.config.max_files:
+            # Check if we've reached the file limit (for testing). Failed
+            # attempts count too, or a limited run could make hundreds of
+            # requests past the limit.
+            if self.config.max_files and len(self.config.visited_urls) >= self.config.max_files:
                 print(f"\n{'='*70}", flush=True)
                 print(f"⚠️  Reached MAX_FILES limit ({self.config.max_files}) - stopping download", flush=True)
                 print(f"{'='*70}", flush=True)
@@ -2255,20 +2399,48 @@ class WaybackDownloader:
             self.config.visited_urls.add(normalized_for_tracking)
 
             content = self.download_file(url)
+            refusal = self._last_failure
+            if content or not refusal:
+                consecutive_refusals = 0
             if not content:
-                # Try CDN fallback for critical jQuery files if Wayback fails
+                # Try CDN fallback for critical jQuery files if Wayback fails:
+                # the version the URL names (x.y also as x.y.0), then 3.7.1.
+                # A ?ver= is often WordPress's version, not jQuery's.
                 if "jquery.min.js" in url.lower() and "cdn" not in url.lower():
-                    content = self._fetch_from_live_cdn("https://code.jquery.com/jquery-3.7.1.min.js")
+                    match = re.search(
+                        r"jquery[-./@]?v?(\d+\.\d+(?:\.\d+)?)|[?&]ver=(\d+\.\d+(?:\.\d+)?)", url, re.I
+                    )
+                    versions = []
+                    if match:
+                        named = match.group(1) or match.group(2)
+                        versions = [named] + ([named + ".0"] if named.count(".") == 1 else [])
+                    for version in dict.fromkeys(versions + ["3.7.1"]):
+                        if version == "3.7.1" and "3.7.1" not in versions:
+                            print(f"         jQuery version unknown or not on code.jquery.com; substituting 3.7.1", flush=True)
+                        content = self._fetch_from_live_cdn(f"https://code.jquery.com/jquery-{version}.min.js")
+                        if content:
+                            break
                 
                 if not content:
                     files_failed += 1
                     print(f"         ⚠️  Failed to download", flush=True)
+                    # Only a file no fallback could save counts as refused.
+                    if refusal:
+                        consecutive_refusals += 1
+                        if consecutive_refusals >= self.MAX_CONSECUTIVE_REFUSALS:
+                            stop_reason = (
+                                f"Stopped: the Wayback Machine refused {consecutive_refusals} requests in a row "
+                                f"(last: {refusal}); try again later"
+                            )
+                            break
                     continue
 
             if self._is_html_instead_of_asset(content, url):
                 files_failed += 1
                 print(f"         ⚠️  Failed: got an HTML page instead of the file", flush=True)
                 continue
+            if url == start_url:
+                url = self._follow_start_redirect(url)
             charset = self._last_charset
             
             # Show file size
@@ -2542,8 +2714,15 @@ class WaybackDownloader:
                 print(f"Error processing {url}: {e}")
                 continue
 
+        if files_downloaded == 0 and not stop_reason:
+            # The start page failed, so nothing else was found. Say so rather
+            # than report an empty archive as complete.
+            raise RuntimeError(
+                f"Nothing was saved: no usable capture of {self.config.base_url} could be downloaded"
+            )
+
         print(f"\n{'='*70}", flush=True)
-        print(f"Download Complete!", flush=True)
+        print(f"Download stopped early" if stop_reason else f"Download Complete!", flush=True)
         print(f"{'='*70}", flush=True)
         print(f"Output directory: {self.config.output_dir}", flush=True)
         print(f"Files successfully downloaded: {files_downloaded}", flush=True)
@@ -2553,4 +2732,6 @@ class WaybackDownloader:
             print(f"Corrupted fonts detected and removed: {len(self.corrupted_fonts)}", flush=True)
         print(f"Total files processed: {len(self.config.visited_urls)}", flush=True)
         print(f"{'='*70}\n", flush=True)
+        if stop_reason:
+            raise RuntimeError(stop_reason)
 

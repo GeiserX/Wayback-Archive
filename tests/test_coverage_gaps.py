@@ -221,12 +221,16 @@ class TestDownloadFileFallbacks:
         assert result is None
 
     def test_non_404_http_error(self):
-        """Non-404 HTTP errors (e.g. 500) should return None without fallback."""
+        """Wayback's own 500 (no memento-datetime) returns None without fallback."""
         import requests
 
+        urls = []
+
         def mock_get(url, **kwargs):
+            urls.append(url)
             resp = Mock()
             resp.status_code = 500
+            resp.headers = {}
             error = requests.exceptions.HTTPError(response=resp)
             resp.raise_for_status = Mock(side_effect=error)
             resp.content = b''
@@ -235,6 +239,7 @@ class TestDownloadFileFallbacks:
         self.dl.session.get = mock_get
         result = self.dl.download_file("http://example.com/style.css")
         assert result is None
+        assert len(urls) == 1
 
     def test_html_if_decode_exception_returns_content(self):
         """If decoding the if_ response fails, content should still be returned."""
@@ -920,8 +925,12 @@ class TestDownloadProcessingErrors:
         output_file = tmp_path / "index.html"
         output_file.touch()
         output_file.chmod(0o000)
-        dl.download()
-        output_file.chmod(0o644)  # restore for cleanup
+        try:
+            # The only page could not be written, so the run saved nothing.
+            with pytest.raises(RuntimeError, match="Nothing was saved"):
+                dl.download()
+        finally:
+            output_file.chmod(0o644)  # restore for cleanup
 
     def test_html_process_error_and_save_error(self, tmp_path):
         """Error processing HTML + error saving raw should not crash."""
@@ -1227,7 +1236,8 @@ class TestDownloadLoopJqueryCdnFallback:
         dl.download_file = Mock(return_value=None)
         dl.session.get = Mock(side_effect=Exception("CDN down"))
 
-        dl.download()
+        with pytest.raises(RuntimeError, match="Nothing was saved"):
+            dl.download()
 
 
 class TestDownloadLoopSkipVisited:

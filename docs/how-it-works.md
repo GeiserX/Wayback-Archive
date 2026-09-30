@@ -1,12 +1,12 @@
 # How it works
 
-1. **Initial download** -- Fetches the main page from the Wayback Machine
+1. **Initial download** -- Fetches the main page from the Wayback Machine. If that capture redirects to another host (a site that moved domains), the tool warns and archives the host that was actually captured
 2. **Link extraction** -- Parses HTML to find all referenced assets (links, images, CSS, JS)
 3. **CSS processing** -- Extracts font URLs, background images, and `@import` statements; downloads Google Fonts locally; detects corrupted font files
 4. **JS processing** -- Extracts dynamically loaded resources from JavaScript
 5. **Data attributes** -- Scans `data-*` attributes for additional asset URLs
 6. **Iterative crawling** -- Continues discovering and downloading resources until the queue is empty
-7. **Timeframe fallback** -- For 404 responses, searches nearby Wayback Machine timestamps
+7. **Timeframe fallback** -- For 404 responses, tries up to three other timestamps: a day either side and a week earlier. Wayback already answers any timestamp with the nearest capture, so closer probes would land on the same answer. A capture that is an archived error (403, 5xx) or a Cloudflare challenge page is replaced by the nearest capture with status 200, found with one query to the Wayback CDX index; when the start page is replaced, the rest of the site is fetched around that capture's timestamp
 8. **URL rewriting** -- Converts all URLs to relative paths for offline serving
 9. **Preservation** -- Maintains icon groups, button links, and cookie consent functionality
 
@@ -17,7 +17,7 @@ Every file is requested from the Wayback Machine (`web.archive.org`). The tool n
 The one exception is a short list of well-known CDN hosts. When the Wayback Machine does not have a file on one of these, the tool fetches it live, without following redirects:
 
 - Google Fonts: `fonts.googleapis.com`, `fonts.gstatic.com`
-- jQuery: `code.jquery.com` (also the source of the jQuery 3.7.1 replacement when a site's own `jquery.min.js` is missing)
+- jQuery: `code.jquery.com` (also the source of the replacement when a site's own `jquery.min.js` is missing: the version its URL names, or 3.7.1)
 - Squarespace: `static1.squarespace.com`, `static.squarespace.com`, `images.squarespace-cdn.com`, `sqspcdn.com` and its subdomains
 
 A host matches only exactly or as a subdomain (`assets.sqspcdn.com`), never by containing the name (`sqspcdn.com.example.net`, `sqspcdn.com@10.0.0.1`). Anything else the Wayback Machine does not have is reported as failed.

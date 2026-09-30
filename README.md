@@ -22,7 +22,8 @@ Wayback-Archive is a Python tool that downloads archived websites from the [Wayb
 
 - Downloads HTML, CSS, JS, images, fonts and every linked asset, following links in HTML, CSS and JS.
 - Rewrites every link to a relative path so the copy works from a local server.
-- Tries nearby Wayback Machine timestamps when a resource returns 404.
+- Tries up to three other Wayback Machine timestamps (a day either side and a week earlier) when a resource returns 404.
+- Replaces a capture that is an archived error or a Cloudflare challenge page with the nearest good capture.
 - Saves Google Fonts locally, and removes corrupted fonts (HTML error pages served as fonts).
 - Falls back to a CDN for critical libraries such as jQuery.
 - Keeps icon groups, button links and cookie consent popups working.

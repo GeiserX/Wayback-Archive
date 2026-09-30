@@ -22,4 +22,4 @@ See [Font Loading Research Notes](https://github.com/GeiserX/Wayback-Archive/blo
 
 ## jQuery or Libraries Not Loading
 
-If the Wayback Machine does not have a site's `jquery.min.js`, the tool replaces it with jQuery 3.7.1 from `code.jquery.com`. Other missing libraries are only fetched live when they are hosted on Google Fonts, `code.jquery.com` or the Squarespace CDN; anything else is reported as failed (see [How it works](how-it-works.md#where-requests-go)).
+If the Wayback Machine does not have a site's `jquery.min.js`, the tool replaces it from `code.jquery.com` with the version the URL names (for example `jquery-1.7.2/jquery.min.js` or `jquery.min.js?ver=3.6.0`), or with jQuery 3.7.1 when the URL names no version. Other missing libraries are only fetched live when they are hosted on Google Fonts, `code.jquery.com` or the Squarespace CDN; anything else is reported as failed (see [How it works](how-it-works.md#where-requests-go)).
