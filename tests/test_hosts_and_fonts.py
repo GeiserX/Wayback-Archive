@@ -10,6 +10,7 @@ single match could swallow neighbouring rules.
 import contextlib
 import io
 import os
+from unittest.mock import Mock
 from urllib.parse import urlparse
 
 import pytest
@@ -178,6 +179,7 @@ class TestCssOnlyQueuesRealGoogleFonts:
             b"export.cgi?fonts.gstatic.com)}"
             b"b{background:url(https://fonts.gstatic.com/s/r/v1/x.woff2)}",
         }
+        dl.session.get = Mock(return_value=Mock(status_code=404))  # the corrupted-font probe
         calls, _ = _archive(dl, pages)
         assert not any("192.168.1.1" in c for c in calls)
         assert "https://fonts.gstatic.com/s/r/v1/x.woff2" in calls

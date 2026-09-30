@@ -1545,6 +1545,7 @@ class TestDownloadMain:
         dl.download_file = Mock(
             return_value=b'@font-face { font-family: "Roboto"; src: url(https://fonts.gstatic.com/s/roboto/v29/file.woff2); }'
         )
+        dl.session.get = Mock(return_value=Mock(status_code=404))  # the corrupted-font probe
         dl.download()
 
     def test_download_content_type_detection_from_content(self, tmp_path):
