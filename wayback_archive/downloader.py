@@ -1558,6 +1558,74 @@ class WaybackDownloader:
             print(f"Error optimizing image: {e}")
             return content
 
+    @staticmethod
+    def _split_srcset(srcset: str) -> List[Tuple[str, str]]:
+        """
+        Split a srcset into (url, descriptor) candidates, as browsers do.
+
+        A URL is a run of non-whitespace, so a comma inside it
+        (Cloudinary's w_400,c_fill) stays part of it; candidates are
+        separated by the comma after a descriptor or at the end of a URL.
+        """
+        candidates = []
+        pos = 0
+        while True:
+            pos = re.compile(r"[\s,]*").match(srcset, pos).end()
+            if pos >= len(srcset):
+                return candidates
+            url = re.compile(r"\S+").match(srcset, pos).group()
+            pos += len(url)
+            descriptor = ""
+            if url.endswith(","):
+                url = url.rstrip(",")
+            else:
+                descriptor = re.compile(r"[^,]*").match(srcset, pos).group()
+                pos += len(descriptor)
+                descriptor = descriptor.strip()
+            candidates.append((url, descriptor))
+
+    def _rewrite_srcset(self, srcset: str, base_url: str, links_to_follow: List[str]) -> str:
+        """Rewrite every srcset candidate to its local path and queue it."""
+        srcset_parts = []
+        for url_part, descriptor in self._split_srcset(srcset):
+            item = f"{url_part} {descriptor}" if descriptor else url_part
+            descriptor = f" {descriptor}" if descriptor else ""
+            original_srcset = url_part
+            # Extract wayback URL if present
+            original = self._extract_original_url_from_path(url_part)
+            if original:
+                url_part = original
+
+            normalized_srcset = self._normalize_url(url_part, base_url)
+            is_squarespace_cdn = self._is_squarespace_cdn(normalized_srcset) or self._is_squarespace_cdn(original_srcset)
+
+            if not (self._is_internal_url(normalized_srcset) or is_squarespace_cdn):
+                # Keep external URLs as-is
+                srcset_parts.append(item)
+                continue
+
+            # Queue for download
+            if normalized_srcset not in self.config.visited_urls:
+                links_to_follow.append(url_part)
+
+            # Rewrite to local path
+            if not self.config.make_internal_links_relative:
+                self._note_reference_kind(normalized_srcset, "image")
+                srcset_parts.append(f"{normalized_srcset}{descriptor}")
+            elif is_squarespace_cdn:
+                parsed_resource = urlparse(normalized_srcset)
+                resource_path = f"{parsed_resource.netloc}{parsed_resource.path}"
+                # Preserve query string if present
+                if parsed_resource.query:
+                    resource_path += "?" + parsed_resource.query
+                while resource_path.startswith("/"):
+                    resource_path = resource_path[1:]
+                srcset_parts.append(f"{self._to_relative_path(f'/{resource_path}')}{descriptor}")
+            else:
+                relative_path = self._get_relative_link_path(normalized_srcset, "image")
+                srcset_parts.append(f"{relative_path}{descriptor}")
+        return ", ".join(srcset_parts)
+
     def _process_html(self, html: str, base_url: str) -> tuple[str, List[str]]:
         """Process HTML content and extract links."""
         self._current_page_url = base_url
@@ -1979,73 +2047,14 @@ class WaybackDownloader:
                 if normalized_url not in self.config.visited_urls:
                     links_to_follow.append(original_url)
 
-        # Process picture/source tags for responsive images
-        for picture in soup.find_all("picture"):
-            for source in picture.find_all("source", srcset=True):
-                srcset = source.get("srcset", "")
-                if not srcset:
-                    continue
-                # Rewrite srcset URLs - handle wayback URLs and convert to local paths
-                # Parse srcset manually (format: "url1 100w, url2 200w" or "url1 1x, url2 2x")
-                srcset_parts = []
-                for item in srcset.split(','):
-                    item = item.strip()
-                    if not item:
-                        continue
-                    # Split URL and descriptor (e.g., "url 500w" or "url?format=100w 100w")
-                    # Descriptor is at the end: space followed by number and 'w' or 'x'
-                    parts = re.split(r'\s+(\d+(?:\.\d+)?[xw])$', item, maxsplit=1)
-                    if len(parts) == 3:
-                        url_part, descriptor, _ = parts
-                        descriptor = f" {descriptor}"
-                    else:
-                        url_part = item
-                        descriptor = ""
-                    
-                    original_srcset = url_part
-                    # Extract wayback URL if present
-                    original = self._extract_original_url_from_path(url_part)
-                    if not original and "web.archive.org" in url_part:
-                        # Try to extract from absolute wayback URL - match the full URL including query strings
-                        wayback_match = re.search(r'/web/\d+[a-z]*(?:im_|cs_|js_|jm_)/(https?://[^\s"\'<>\)]+)', url_part)
-                        if wayback_match:
-                            original = wayback_match.group(1)
-                    
-                    if original:
-                        url_part = original
-                    
-                    normalized_srcset = self._normalize_url(url_part, base_url)
-                    is_squarespace_cdn = self._is_squarespace_cdn(normalized_srcset) or self._is_squarespace_cdn(original_srcset)
-                    
-                    # Queue for download if internal or Squarespace CDN
-                    if (self._is_internal_url(normalized_srcset) or is_squarespace_cdn) and normalized_srcset not in self.config.visited_urls:
-                        links_to_follow.append(url_part)
-                    
-                    # Rewrite to local path
-                    if self._is_internal_url(normalized_srcset) or is_squarespace_cdn:
-                        if is_squarespace_cdn:
-                            parsed_resource = urlparse(normalized_srcset)
-                            resource_path = f"{parsed_resource.netloc}{parsed_resource.path}"
-                            # Preserve query string if present
-                            if parsed_resource.query:
-                                resource_path += "?" + parsed_resource.query
-                            while resource_path.startswith("/"):
-                                resource_path = resource_path[1:]
-                            if self.config.make_internal_links_relative:
-                                srcset_parts.append(f"{self._to_relative_path(f'/{resource_path}')}{descriptor}")
-                            else:
-                                srcset_parts.append(f"{normalized_srcset}{descriptor}")
-                        else:
-                            relative_path = self._get_relative_link_path(normalized_srcset, "image")
-                            srcset_parts.append(f"{relative_path}{descriptor}")
-                    else:
-                        # Keep external URLs as-is
-                        srcset_parts.append(item)
-                
-                if srcset_parts:
-                    source["srcset"] = ", ".join(srcset_parts)
-            # The <img> inside a <picture> was already rewritten and queued by
-            # the img pass above; a second pass here re-queued its local path.
+        # Process srcset everywhere (img, picture > source, link
+        # imagesrcset, lazy-load data-srcset): every candidate is rewritten
+        # and downloaded, since the browser may pick any of them over src.
+        for attr_name in ("srcset", "imagesrcset", "data-srcset"):
+            for element in soup.find_all(attrs={attr_name: True}):
+                srcset = element.get(attr_name, "")
+                if isinstance(srcset, str) and srcset.strip():
+                    element[attr_name] = self._rewrite_srcset(srcset, base_url, links_to_follow)
 
         # Process CSS links
         for link in soup.find_all("link", rel="stylesheet", href=True):

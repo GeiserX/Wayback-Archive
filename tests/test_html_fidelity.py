@@ -178,3 +178,51 @@ class TestCatchAllAttributePasses:
         dl = _make_dl()
         _process(dl, f'<html><body><video poster="{W}im_/https://site.com/media/poster"></video></body></html>')
         assert "im_/" in dl._convert_to_wayback_url("https://site.com/media/poster")
+
+
+class TestSrcset:
+    """Every srcset keeps every candidate, each rewritten and downloaded."""
+
+    def test_img_srcset_keeps_all_candidates(self):
+        dl = _make_dl()
+        soup, links = _process(dl, (
+            f'<html><body><img src="{W}im_/https://site.com/a.jpg" '
+            f'srcset="{W}im_/https://site.com/a-1x.jpg 1x, {W}im_/https://site.com/a-2x.jpg 2x">'
+            '</body></html>'
+        ))
+        assert soup.img["srcset"] == "a-1x.jpg 1x, a-2x.jpg 2x"
+        assert "https://site.com/a-1x.jpg" in links
+        assert "https://site.com/a-2x.jpg" in links
+
+    def test_candidates_without_space_after_comma(self):
+        dl = _make_dl()
+        soup, links = _process(dl, (
+            f'<html><body><img srcset="{W}im_/https://site.com/s.jpg 300w,{W}im_/https://site.com/m.jpg 600w">'
+            '</body></html>'
+        ))
+        assert soup.img["srcset"] == "s.jpg 300w, m.jpg 600w"
+        assert "https://site.com/m.jpg" in links
+
+    def test_link_imagesrcset_and_data_srcset(self):
+        dl = _make_dl()
+        soup, links = _process(dl, (
+            f'<html><head><link rel="preload" as="image" imagesrcset="{W}im_/https://site.com/p1.jpg 1x, {W}im_/https://site.com/p2.jpg 2x"></head>'
+            f'<body><img data-srcset="{W}im_/https://site.com/l1.jpg 1x, {W}im_/https://site.com/l2.jpg 2x"></body></html>'
+        ))
+        assert soup.link["imagesrcset"] == "p1.jpg 1x, p2.jpg 2x"
+        assert soup.img["data-srcset"] == "l1.jpg 1x, l2.jpg 2x"
+        for name in ("p1.jpg", "p2.jpg", "l1.jpg", "l2.jpg"):
+            assert f"https://site.com/{name}" in links
+
+    def test_commas_inside_candidate_urls_survive(self):
+        dl = _make_dl()
+        soup, links = _process(dl, (
+            '<html><body><picture><source srcset="'
+            f'{WA}im_/https://res.cloudinary.com/demo/image/upload/w_400,c_fill/a.jpg 400w, '
+            f'{WA}im_/https://res.cloudinary.com/demo/image/upload/w_800,c_fill/a.jpg 800w">'
+            f'<img src="{W}im_/https://site.com/x.jpg"></picture></body></html>'
+        ))
+        srcset = soup.source["srcset"]
+        assert "w_400,c_fill/a.jpg 400w" in srcset
+        assert "w_800,c_fill/a.jpg 800w" in srcset
+        assert not any(link.endswith("c_fill/a.jpg") and "cloudinary" not in link for link in links)
