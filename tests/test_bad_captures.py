@@ -217,6 +217,35 @@ class TestBadCapture:
         assert dl.download_file("http://example.com/about") == GOOD_PAGE
         assert len(_cdx_calls(dl)) == 1
 
+    def test_challenge_200_skips_the_bad_capture_cdx_returns_first(self):
+        """A challenge archived with status 200 passes CDX's statuscode:200
+        filter, so CDX's closest row is the challenge itself."""
+        dl = _make_downloader()
+        dl.session.get = _Recorder(_BadCaptureWayback(
+            _Response(200, CHALLENGE),
+            lambda kwargs: _cdx_rows(TS, "20191231230000"),
+        ))
+        assert dl.download_file("http://example.com/about") == GOOD_PAGE
+        assert len(_cdx_calls(dl)) == 1
+        assert dl.session.get.calls[-1][0] == (
+            "https://web.archive.org/web/20191231230000if_/http://example.com/about"
+        )
+
+    def test_challenge_200_skips_the_capture_wayback_redirected_to(self):
+        served = "20200101000512"
+
+        def handler(url, kwargs):
+            if url == CDX:
+                return _cdx_rows(served, "20191231230000")
+            if f"/{TS}" in url or f"/{served}" in url:
+                return _Response(200, CHALLENGE, url=f"https://web.archive.org/web/{served}if_/http://example.com/about")
+            return _Response(200, GOOD_PAGE, url=url)
+
+        dl = _make_downloader()
+        dl.session.get = _Recorder(handler)
+        assert dl.download_file("http://example.com/about") == GOOD_PAGE
+        assert "/20191231230000if_/" in dl.session.get.calls[-1][0]
+
     def test_archived_429_page_is_a_bad_capture_not_throttling(self):
         """Wayback's own 429 has no memento-datetime; an archived one is the
         site's answer, and a page is treated like an asset."""

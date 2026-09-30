@@ -804,10 +804,10 @@ class WaybackDownloader:
             return "Cloudflare challenge page"
         return None
 
-    def _nearest_good_timestamp(self, url: str) -> Optional[str]:
+    def _nearest_good_timestamp(self, url: str, bad_timestamp: str) -> Optional[str]:
         """The timestamp of the capture of url with status 200 closest to the
-        requested one, from one CDX query; None when there is none or CDX
-        does not answer."""
+        requested one, other than bad_timestamp, from one CDX query; None when
+        there is none or CDX does not answer."""
         if (
             self._cdx_lookups >= self.CDX_MAX_LOOKUPS
             or self._cdx_failures >= self.CDX_MAX_CONSECUTIVE_FAILURES
@@ -824,7 +824,9 @@ class WaybackDownloader:
                     "filter": "statuscode:200",
                     "closest": self.original_datetime.strftime('%Y%m%d%H%M%S'),
                     "sort": "closest",
-                    "limit": "1",
+                    # A challenge archived as 200 passes the filter, so the
+                    # closest row can be the bad capture itself.
+                    "limit": "5",
                 },
                 timeout=30,
             )
@@ -837,14 +839,18 @@ class WaybackDownloader:
                 print("         ⚠️  The Wayback CDX index is not answering; no more capture lookups this run", flush=True)
             return None
         self._cdx_failures = 0
-        if len(rows) > 1 and rows[1]:
-            return str(rows[1][0])
+        for row in rows[1:]:
+            if row and str(row[0]) != bad_timestamp:
+                return str(row[0])
         return None
 
-    def _fetch_nearest_good_capture(self, url: str, reason: str, is_html_page: bool) -> Optional[bytes]:
+    def _fetch_nearest_good_capture(self, url: str, reason: str, is_html_page: bool, bad_response) -> Optional[bytes]:
         """Replace a bad capture of url with the nearest good one, if any."""
         print(f"         ⚠️  Capture is {reason}; looking for the nearest good one", flush=True)
-        timestamp = self._nearest_good_timestamp(url)
+        # The capture Wayback served, which can differ from the one asked for.
+        served = re.search(r"/web/(\d{14})", bad_response.url or "")
+        bad_timestamp = served.group(1) if served else self.original_datetime.strftime('%Y%m%d%H%M%S')
+        timestamp = self._nearest_good_timestamp(url, bad_timestamp)
         if not timestamp:
             print(f"         ⚠️  No good capture found", flush=True)
             return None
@@ -914,7 +920,7 @@ class WaybackDownloader:
                 )
                 reason = self._bad_capture_reason(response)
                 if reason:
-                    return self._fetch_nearest_good_capture(url, reason, is_html_page)
+                    return self._fetch_nearest_good_capture(url, reason, is_html_page, response)
                 if response.status_code == 429:
                     # Still throttled after the retries; the plain URL would be too.
                     self._last_failure = "throttled"
@@ -958,7 +964,7 @@ class WaybackDownloader:
             )
             reason = self._bad_capture_reason(response)
             if reason:
-                return self._fetch_nearest_good_capture(url, reason, is_html_page)
+                return self._fetch_nearest_good_capture(url, reason, is_html_page, response)
             response.raise_for_status()
             content = self._body_of(response)
             
