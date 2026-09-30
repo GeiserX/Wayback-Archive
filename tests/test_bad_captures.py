@@ -12,6 +12,7 @@ import os
 import pytest
 import requests
 
+from wayback_archive import cli
 from wayback_archive.config import Config
 from wayback_archive.downloader import WaybackDownloader
 
@@ -29,7 +30,7 @@ def _make_downloader(wayback_url=None, output_dir=None):
 @pytest.fixture(autouse=True)
 def _clean_env():
     yield
-    for key in ("WAYBACK_URL", "MAX_FILES", "MAKE_WWW", "MAKE_NON_WWW"):
+    for key in ("WAYBACK_URL", "MAX_FILES", "MAKE_WWW", "MAKE_NON_WWW", "OUTPUT_DIR"):
         os.environ.pop(key, None)
 
 
@@ -280,3 +281,41 @@ class TestBadCapture:
         for n in range(30):
             dl.download_file(f"http://example.com/p{n}")
         assert len(_cdx_calls(dl)) == 25
+
+
+def _run_cli(monkeypatch, tmp_path, handler, wayback_url=None):
+    """Run cli.main() against a fake Wayback; return (exit code, stdout, stderr lines)."""
+    os.environ["WAYBACK_URL"] = wayback_url or f"https://web.archive.org/web/{TS}/http://example.com/"
+    os.environ["OUTPUT_DIR"] = str(tmp_path / "out")
+    recorder = _Recorder(handler)
+    monkeypatch.setattr(requests.Session, "get", lambda self, url, **kwargs: recorder(url, **kwargs))
+    code = 0
+    try:
+        cli.main()
+    except SystemExit as e:
+        code = e.code
+    return code, recorder
+
+
+class TestExitStatus:
+    def test_nothing_saved_exits_1_with_one_line(self, monkeypatch, tmp_path, capsys):
+        code, _ = _run_cli(monkeypatch, tmp_path, lambda url, kwargs: _Response(503, b"down"))
+        err = capsys.readouterr().err
+        assert code == 1
+        assert err.startswith("Error: ") and err.count("\n") == 1
+        assert "http://example.com/" in err
+        assert "Traceback" not in err
+
+    def test_a_saved_start_page_exits_0(self, monkeypatch, tmp_path, capsys):
+        code, _ = _run_cli(monkeypatch, tmp_path, lambda url, kwargs: _Response(200, GOOD_PAGE))
+        assert code == 0
+        assert (tmp_path / "out" / "index.html").exists()
+
+    @pytest.mark.parametrize("url", ["not-a-url", "https://example.com/"])
+    def test_malformed_wayback_url_is_one_line_not_a_traceback(self, monkeypatch, tmp_path, capsys, url):
+        code, recorder = _run_cli(monkeypatch, tmp_path, lambda u, kwargs: _Response(200, GOOD_PAGE), url)
+        err = capsys.readouterr().err
+        assert code == 1
+        assert err.startswith("Error: WAYBACK_URL") and err.count("\n") == 1
+        assert "https://web.archive.org/web/<timestamp>/<url>" in err
+        assert recorder.calls == []

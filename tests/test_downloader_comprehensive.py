@@ -72,7 +72,7 @@ class TestParseWaybackUrl:
         """Invalid Wayback URL format raises ValueError."""
         os.environ["WAYBACK_URL"] = "http://not-wayback.com/page"
         config = Config()
-        with pytest.raises(ValueError, match="Invalid Wayback URL"):
+        with pytest.raises(ValueError, match="WAYBACK_URL must look like"):
             WaybackDownloader(config)
 
     def test_unparseable_timestamp_fallback(self):
@@ -1453,9 +1453,11 @@ class TestDownloadMain:
 
     def test_download_creates_output_dir(self, tmp_path):
         """download() creates the output directory."""
-        dl = self._make_dl(tmp_path)
-        dl.config.max_files = 0  # stop immediately
-        dl.download()
+        dl = self._make_dl(tmp_path / "new")
+        dl.download_file = Mock(return_value=None)  # no network
+        with pytest.raises(RuntimeError, match="Nothing was saved"):
+            dl.download()
+        assert (tmp_path / "new").is_dir()
 
     def test_download_respects_max_files(self, tmp_path):
         """download() stops when max_files is reached."""
@@ -1471,7 +1473,8 @@ class TestDownloadMain:
         dl = self._make_dl(tmp_path)
         dl.config.max_files = 1
         dl.download_file = Mock(return_value=None)
-        dl.download()
+        with pytest.raises(RuntimeError, match="Nothing was saved"):
+            dl.download()
 
     def test_download_processes_css_file(self, tmp_path):
         """CSS files should be processed and their URLs extracted."""

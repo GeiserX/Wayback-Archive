@@ -925,8 +925,12 @@ class TestDownloadProcessingErrors:
         output_file = tmp_path / "index.html"
         output_file.touch()
         output_file.chmod(0o000)
-        dl.download()
-        output_file.chmod(0o644)  # restore for cleanup
+        try:
+            # The only page could not be written, so the run saved nothing.
+            with pytest.raises(RuntimeError, match="Nothing was saved"):
+                dl.download()
+        finally:
+            output_file.chmod(0o644)  # restore for cleanup
 
     def test_html_process_error_and_save_error(self, tmp_path):
         """Error processing HTML + error saving raw should not crash."""
@@ -1232,7 +1236,8 @@ class TestDownloadLoopJqueryCdnFallback:
         dl.download_file = Mock(return_value=None)
         dl.session.get = Mock(side_effect=Exception("CDN down"))
 
-        dl.download()
+        with pytest.raises(RuntimeError, match="Nothing was saved"):
+            dl.download()
 
 
 class TestDownloadLoopSkipVisited:

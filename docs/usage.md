@@ -46,3 +46,7 @@ python3 -m wayback_archive.cli
 cd output && python3 -m http.server 8000
 # Open http://localhost:8000
 ```
+
+## Exit status
+
+The command exits with status 1 and a one-line `Error:` message when `WAYBACK_URL` is not a Wayback Machine URL, or when nothing could be saved because the start page has no usable capture. A run that saves the start page exits 0, even if some assets failed.

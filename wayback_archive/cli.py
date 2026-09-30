@@ -18,10 +18,8 @@ def main():
         print(f"Error: {error}", file=sys.stderr, flush=True)
         sys.exit(1)
 
-    # Create downloader and start
-    downloader = WaybackDownloader(config)
-    
     try:
+        downloader = WaybackDownloader(config)
         downloader.download()
     except KeyboardInterrupt:
         print("\nDownload interrupted by user")

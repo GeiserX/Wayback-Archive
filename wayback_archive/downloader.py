@@ -186,7 +186,10 @@ class WaybackDownloader:
                 # the latest capture, so search around now.
                 self.original_datetime = datetime.now()
         else:
-            raise ValueError(f"Invalid Wayback URL format: {self.config.wayback_url}")
+            raise ValueError(
+                "WAYBACK_URL must look like https://web.archive.org/web/<timestamp>/<url>, "
+                f"got: {self.config.wayback_url}"
+            )
 
     @staticmethod
     def _strip_default_port(netloc: str, scheme: str) -> str:
@@ -2599,6 +2602,13 @@ class WaybackDownloader:
                 files_failed += 1
                 print(f"Error processing {url}: {e}")
                 continue
+
+        if files_downloaded == 0:
+            # The start page failed, so nothing else was found. Say so rather
+            # than report an empty archive as complete.
+            raise RuntimeError(
+                f"Nothing was saved: no usable capture of {self.config.base_url} could be downloaded"
+            )
 
         print(f"\n{'='*70}", flush=True)
         print(f"Download Complete!", flush=True)
