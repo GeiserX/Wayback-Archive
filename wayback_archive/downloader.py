@@ -76,36 +76,38 @@ class WaybackDownloader:
     # belong to someone else today, and what it serves now is not the archive.
     LIVE_FALLBACK_HOSTS = GOOGLE_FONT_HOSTS + ("code.jquery.com",) + SQUARESPACE_CDN_HOSTS
 
-    # Common tracker/analytics patterns
-    TRACKER_PATTERNS = [
-        r"google-analytics\.com",
-        r"googletagmanager\.com",
-        r"facebook\.net",
-        r"doubleclick\.net",
-        r"googleads\.g\.doubleclick\.net",
-        r"googlesyndication\.com",
-        r"facebook\.com/tr",
-        r"analytics\.",
-        r"stats\.",
-        r"tracking\.",
-        r"tagmanager\.google\.com",
-        r"gtag\.js",
-        r"ga\.js",
-        r"analytics\.js",
-    ]
+    # Trackers and ads are recognised by host and exact file name only, and
+    # never on the archived site's own host: a word anywhere in the URL
+    # (banner, popup, "ads." in threads.png) deleted the site's own files.
+    # A host matches itself and its subdomains.
+    TRACKER_HOSTS = (
+        "google-analytics.com",
+        "googletagmanager.com",
+        "tagmanager.google.com",
+        "facebook.net",
+        "doubleclick.net",
+        "googlesyndication.com",
+    )
+    # A host whose own name starts with one of these labels
+    # (stats.wp.com, analytics.example.net).
+    TRACKER_HOST_LABELS = ("analytics", "stats", "tracking")
+    TRACKER_FILES = ("gtag.js", "ga.js", "analytics.js", "urchin.js")
+    # Markers of the Google Analytics / Tag Manager snippets in inline code.
+    TRACKER_INLINE_MARKERS = (
+        "gtag('config'",
+        'gtag("config"',
+        "googletagmanager.com/gtm.js",
+        "googleanalyticsobject",
+        "_gaq.push",
+    )
 
-    # Common ad patterns
-    AD_PATTERNS = [
-        r"ads\.",
-        r"advertising\.com",
-        r"doubleclick\.net",
-        r"googlesyndication\.com",
-        r"googleads\.",
-        r"adserver\.",
-        r"banner",
-        r"popup",
-        r"sponsor",
-    ]
+    AD_HOSTS = (
+        "advertising.com",
+        "doubleclick.net",
+        "googlesyndication.com",
+        "googleadservices.com",
+    )
+    AD_HOST_LABELS = ("ads", "adserver", "googleads")
 
     # Contact link patterns
     CONTACT_PATTERNS = [
@@ -290,19 +292,52 @@ class WaybackDownloader:
                     '.json', '.xml', '.txt', '.pdf'}
         return not any(path_lower.endswith(e) for e in non_html)
 
+    def _third_party_parts(self, url: str) -> Optional[Tuple[str, str]]:
+        """(host, path) of a URL on another host, None for the site's own."""
+        url = self._extract_original_url_from_path(url) or url
+        parsed = urlparse("https:" + url if url.startswith("//") else url)
+        host = (parsed.hostname or "").lower()
+        if not host or host.removeprefix("www.") == (self.config.domain or "").lower().removeprefix("www."):
+            return None
+        return host, parsed.path
+
+    def _matches_blocklist(self, url: str, hosts, labels, files=()) -> bool:
+        parts = self._third_party_parts(url)
+        if not parts:
+            return False
+        host, path = parts
+        return (
+            any(host == h or host.endswith("." + h) for h in hosts)
+            or host.split(".")[0] in labels
+            or posixpath.basename(path).lower() in files
+        )
+
     def _is_tracker(self, url: str) -> bool:
         """Check if URL is a tracker/analytics script."""
-        for pattern in self.TRACKER_PATTERNS:
-            if re.search(pattern, url, re.IGNORECASE):
-                return True
-        return False
+        parts = self._third_party_parts(url)
+        if parts and _host_matches("https://" + parts[0], ("facebook.com",)) and parts[1].rstrip("/") == "/tr":
+            return True
+        return self._matches_blocklist(url, self.TRACKER_HOSTS, self.TRACKER_HOST_LABELS, self.TRACKER_FILES)
 
     def _is_ad(self, url: str) -> bool:
         """Check if URL is an ad."""
-        for pattern in self.AD_PATTERNS:
-            if re.search(pattern, url, re.IGNORECASE):
-                return True
-        return False
+        return self._matches_blocklist(url, self.AD_HOSTS, self.AD_HOST_LABELS)
+
+    # One URL and nothing else: no whitespace, no JSON or script punctuation.
+    _SINGLE_URL = re.compile(r"[^\s{}\[\]\"'<>;]+")
+
+    def _is_single_url_attr(self, attr_name: str, value: str) -> bool:
+        """
+        True when an attribute value is plainly one URL.
+
+        The catch-all passes used to rewrite any value that mentioned the
+        site, which turned JSON settings, inline handlers and meta refresh
+        content into a percent-encoded file name.
+        """
+        if attr_name.startswith("on") or attr_name in ("style", "srcset", "imagesrcset"):
+            return False
+        value = value.strip()
+        return bool(self._SINGLE_URL.fullmatch(value)) and value.startswith(("http://", "https://", "/"))
 
     def _is_contact_link(self, url: str) -> bool:
         """Check if URL is a contact link."""
@@ -404,11 +439,15 @@ class WaybackDownloader:
             
             # Pattern: /web/TIMESTAMP/https://original.com/path and replay variants
             # such as im_, cs_, js_, jm_, if_, and fw_.
-            wayback_url_pattern = r"(?:https?://web\.archive\.org)?/web/\d+(?:[a-z]+_)?/(https?://[^\"\s'<>\)]+)"
+            wayback_url_pattern = r"(?:https?://web\.archive\.org)?/web/\d+(?:[a-z]+_)?/(https?://[^\"\s'<>]+)"
             match = re.search(wayback_url_pattern, path)
             if match:
                 extracted = match.group(1)
-                extracted = extracted.rstrip('.,;:)\'"')
+                extracted = extracted.rstrip('.,;:\'"')
+                # A ")" belongs to the URL when it closes a "(" inside it
+                # (File_(2).png); an unmatched one closes a url(...) wrapper.
+                while extracted.endswith(")") and extracted.count(")") > extracted.count("("):
+                    extracted = extracted[:-1].rstrip('.,;:\'"')
                 return extracted
             
             # Pattern for mailto:/tel:/whatsapp: in wayback URLs
@@ -472,11 +511,14 @@ class WaybackDownloader:
                     netloc=self._strip_default_port(parsed.netloc, parsed.scheme),
                 )
 
-        # Handle www/non-www conversion
-        if self.config.make_non_www and parsed.netloc.startswith("www."):
-            parsed = parsed._replace(netloc=parsed.netloc[4:])
-        elif self.config.make_www and not parsed.netloc.startswith("www.") and parsed.netloc:
-            parsed = parsed._replace(netloc="www." + parsed.netloc)
+        # Handle www/non-www conversion, for the archived site's host only:
+        # www.gstatic.com and cdn.jsdelivr.net are other people's names.
+        site_domain = (self.config.domain or "").lower().removeprefix("www.")
+        if url_domain == site_domain:
+            if self.config.make_www and not parsed.netloc.startswith("www."):
+                parsed = parsed._replace(netloc="www." + parsed.netloc)
+            elif not self.config.make_www and self.config.make_non_www and parsed.netloc.startswith("www."):
+                parsed = parsed._replace(netloc=parsed.netloc[4:])
 
         # Remove fragment and query string for file identification
         # This ensures URLs with different query params or fragments point to the same file
@@ -1297,7 +1339,7 @@ class WaybackDownloader:
         urls = []
         
         # Extract @import URLs
-        import_pattern = r'@import\s+(?:url\()?["\']?([^"\'()]+)["\']?\)?'
+        import_pattern = r'@import\s+(?:url\()?["\']?((?:[^"\'()]|\([^"\'()]*\))+)["\']?\)?'
         for match in re.finditer(import_pattern, css, re.IGNORECASE):
             import_url = match.group(1).strip()
             # Extract from wayback URLs
@@ -1309,7 +1351,7 @@ class WaybackDownloader:
                 urls.append(normalized)
         
         # Extract url() references (images, fonts, etc.)
-        url_pattern = r'url\s*\(\s*["\']?([^"\'()]+)["\']?\s*\)'
+        url_pattern = r'url\s*\(\s*["\']?((?:[^"\'()]|\([^"\'()]*\))+)["\']?\s*\)'
         for match in re.finditer(url_pattern, css, re.IGNORECASE):
             css_url = match.group(1).strip()
             # Skip data URIs and special protocols
@@ -1375,29 +1417,10 @@ class WaybackDownloader:
                     self._note_reference_kind(normalized, reference_kind)
 
                 if self.config.make_internal_links_relative:
-                    # For Google Fonts, construct relative path from the normalized URL
-                    if is_google_font:
-                        # Construct path directly from URL to avoid path duplication
-                        parsed_font = urlparse(normalized)
-                        if "fonts.gstatic.com" in parsed_font.netloc:
-                            # Path will be like fonts.gstatic.com/s/montserrat/v29/...
-                            # Check if path already contains the domain (avoid duplication)
-                            font_path = parsed_font.path.lstrip("/")
-                            if font_path.startswith("fonts.gstatic.com"):
-                                relative_path = font_path
-                            else:
-                                relative_path = f"{parsed_font.netloc}/{font_path}"
-                        elif "fonts.googleapis.com" in parsed_font.netloc:
-                            # For Google Fonts CSS files
-                            relative_path = parsed_font.path.lstrip("/")
-                        else:
-                            relative_path = parsed_font.path.lstrip("/")
-                        # Ensure it starts with / for absolute paths
-                        if not relative_path.startswith("/"):
-                            relative_path = "/" + relative_path
-                        new_path = relative_path
-                    else:
-                        new_path = self._make_relative_path(normalized, reference_kind)
+                    # _get_local_path knows where Google Fonts files are
+                    # stored (css-<hash>.css for a stylesheet), so the link
+                    # goes through it like any other.
+                    new_path = self._make_relative_path(normalized, reference_kind)
                     return f"url({new_path})"
                 return f"url({normalized})"
             
@@ -1429,7 +1452,11 @@ class WaybackDownloader:
                 url_part = f"{parsed_base.scheme}://{parsed_base.netloc}{url_part}"
 
             normalized = self._normalize_url(url_part, base_url)
-            if not (self._is_internal_url(normalized) or self._is_squarespace_cdn(normalized)):
+            if not (
+                self._is_internal_url(normalized)
+                or self._is_squarespace_cdn(normalized)
+                or self._is_google_fonts_css(normalized)
+            ):
                 return match.group(0)
 
             # Note it before the branch below, which does not run with
@@ -1452,17 +1479,16 @@ class WaybackDownloader:
             flags=re.IGNORECASE,
         )
 
-        # Pattern to match url() with wayback URLs and absolute paths
-        url_patterns = [
-            r'url\s*\(\s*["\']?(https?://web\.archive\.org/web/\d+[a-z]*(?:im_|cs_|js_|jm_)/https?://[^"\'()]+)["\']?\s*\)',  # Absolute wayback (check first)
-            r'url\s*\(\s*["\']?(/web/\d+[a-z]*(?:im_|cs_|js_|jm_)/https?://[^"\'()]+)["\']?\s*\)',  # Relative wayback
-            r'url\s*\(\s*["\']?(https?://[^"\'()]+)["\']?\s*\)',  # Regular URLs
-            r'url\s*\(\s*["\']?(/[^"\'()]+)["\']?\s*\)',  # Absolute paths (for Google Fonts CSS)
-        ]
-        
-        for pattern in url_patterns:
-            css = re.sub(pattern, replace_css_url, css, flags=re.IGNORECASE)
-        
+        # url() holding an absolute URL (Wayback form included) or a
+        # root-relative path. One pass: a second pattern run after the first
+        # re-matched the paths it had just written.
+        css = re.sub(
+            r'url\s*\(\s*["\']?((?:https?://|/)(?:[^"\'()]|\([^"\'()]*\))+)["\']?\s*\)',
+            replace_css_url,
+            css,
+            flags=re.IGNORECASE,
+        )
+
         return css
 
     def _extract_js_urls(self, js: str, base_url: str) -> List[str]:
@@ -1481,10 +1507,10 @@ class WaybackDownloader:
         for pattern in patterns:
             for match in re.finditer(pattern, js):
                 js_url = match.group(1).strip()
-                # Skip if it looks like code, not a URL
-                if any(skip in js_url for skip in ["function", "return", "if", "else", "var ", "let ", "const "]):
-                    continue
-                if not js_url.startswith(("data:", "javascript:", "vbscript:", "#", "mailto:", "tel:", "//", "http", "https")):
+                # Skip if it looks like code, not a URL. A word test ("if")
+                # threw away every .gif; code has spaces or braces. URLs may
+                # hold parentheses and semicolons (File_(2).png, a.png;v=2).
+                if re.search(r"[\s{}<>]", js_url):
                     continue
                 if not js_url.startswith(("http://", "https://", "/")):
                     continue
@@ -1508,27 +1534,151 @@ class WaybackDownloader:
             from io import BytesIO
 
             img = Image.open(BytesIO(content))
-            
-            # Convert RGBA to RGB for JPEG
-            if format.upper() == "JPEG" and img.mode == "RGBA":
-                background = Image.new("RGB", img.size, (255, 255, 255))
-                background.paste(img, mask=img.split()[3])
-                img = background
-            elif img.mode not in ("RGB", "L"):
+
+            # Only re-encode a still image into the format it already is: a
+            # favicon.ico came out as JPEG bytes, and an animated GIF as its
+            # first frame.
+            if (img.format or "").upper() != format.upper() or getattr(img, "is_animated", False):
+                return content
+
+            # Convert only for JPEG (a CMYK one, say); PNG, GIF and WEBP keep
+            # their mode and so their transparency.
+            if format.upper() == "JPEG" and img.mode not in ("RGB", "L"):
                 img = img.convert("RGB")
 
             output = BytesIO()
             img.save(output, format=format, optimize=True, quality=85)
-            return output.getvalue()
+            optimized = output.getvalue()
+            return optimized if len(optimized) < len(content) else content
         except Exception as e:
             print(f"Error optimizing image: {e}")
             return content
+
+    @staticmethod
+    def _split_srcset(srcset: str) -> List[Tuple[str, str]]:
+        """
+        Split a srcset into (url, descriptor) candidates, as browsers do.
+
+        A URL is a run of non-whitespace, so a comma inside it
+        (Cloudinary's w_400,c_fill) stays part of it; candidates are
+        separated by the comma after a descriptor or at the end of a URL.
+        """
+        candidates = []
+        pos = 0
+        while True:
+            pos = re.compile(r"[\s,]*").match(srcset, pos).end()
+            if pos >= len(srcset):
+                return candidates
+            url = re.compile(r"\S+").match(srcset, pos).group()
+            pos += len(url)
+            descriptor = ""
+            if url.endswith(","):
+                url = url.rstrip(",")
+            else:
+                descriptor = re.compile(r"[^,]*").match(srcset, pos).group()
+                pos += len(descriptor)
+                descriptor = descriptor.strip()
+            candidates.append((url, descriptor))
+
+    def _rewrite_srcset(self, srcset: str, base_url: str, links_to_follow: List[str]) -> str:
+        """Rewrite every srcset candidate to its local path and queue it."""
+        srcset_parts = []
+        for url_part, descriptor in self._split_srcset(srcset):
+            item = f"{url_part} {descriptor}" if descriptor else url_part
+            descriptor = f" {descriptor}" if descriptor else ""
+            original_srcset = url_part
+            # Extract wayback URL if present
+            original = self._extract_original_url_from_path(url_part)
+            if original:
+                url_part = original
+
+            normalized_srcset = self._normalize_url(url_part, base_url)
+            is_squarespace_cdn = self._is_squarespace_cdn(normalized_srcset) or self._is_squarespace_cdn(original_srcset)
+
+            if not (self._is_internal_url(normalized_srcset) or is_squarespace_cdn):
+                # Keep external URLs as-is
+                srcset_parts.append(item)
+                continue
+
+            # Queue for download
+            if normalized_srcset not in self.config.visited_urls:
+                links_to_follow.append(url_part)
+
+            # Rewrite to local path
+            if not self.config.make_internal_links_relative:
+                self._note_reference_kind(normalized_srcset, "image")
+                srcset_parts.append(f"{normalized_srcset}{descriptor}")
+            elif is_squarespace_cdn:
+                parsed_resource = urlparse(normalized_srcset)
+                resource_path = f"{parsed_resource.netloc}{parsed_resource.path}"
+                # Preserve query string if present
+                if parsed_resource.query:
+                    resource_path += "?" + parsed_resource.query
+                while resource_path.startswith("/"):
+                    resource_path = resource_path[1:]
+                srcset_parts.append(f"{self._to_relative_path(f'/{resource_path}')}{descriptor}")
+            else:
+                relative_path = self._get_relative_link_path(normalized_srcset, "image")
+                srcset_parts.append(f"{relative_path}{descriptor}")
+        return ", ".join(srcset_parts)
+
+    # Attributes holding one URL that a <base href> re-bases.
+    _BASE_RELATIVE_ATTRS = ("href", "src", "poster", "data", "action", "background", "data-src")
+    _HAS_SCHEME = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*:")
+
+    def _resolve_against_base(self, soup: BeautifulSoup, base_url: str) -> None:
+        """
+        Make the page-relative references of a page with <base href> absolute.
+
+        Once the base is dropped, a reference the passes in _process_html
+        leave as written (url(img/bg.png), <video poster>, <form action>)
+        would resolve against the page's own file instead. Absolute, every
+        pass treats it like any other URL: a local path when it is on the
+        site, the base's host when it is not.
+        """
+        def resolve(value: str) -> str:
+            value = value.strip()
+            if (
+                not value
+                or value.startswith(("/", "#"))
+                or self._HAS_SCHEME.match(value)
+                or not self._SINGLE_URL.fullmatch(value)
+            ):
+                return value
+            return urljoin(base_url, value)
+
+        css_url = re.compile(r'url\s*\(\s*(["\']?)((?:[^"\'()]|\([^"\'()]*\))+)\1\s*\)', re.IGNORECASE)
+
+        def resolve_css(css: str) -> str:
+            return css_url.sub(lambda m: f"url({m.group(1)}{resolve(m.group(2))}{m.group(1)})", css)
+
+        for element in soup.find_all(True):
+            for attr_name in self._BASE_RELATIVE_ATTRS:
+                value = element.get(attr_name)
+                if isinstance(value, str):
+                    element[attr_name] = resolve(value)
+            if isinstance(element.get("style"), str):
+                element["style"] = resolve_css(element["style"])
+        for style_tag in soup.find_all("style"):
+            if style_tag.string:
+                style_tag.string = resolve_css(style_tag.string)
 
     def _process_html(self, html: str, base_url: str) -> tuple[str, List[str]]:
         """Process HTML content and extract links."""
         self._current_page_url = base_url
         soup = BeautifulSoup(html, "lxml")
         links_to_follow: List[str] = []
+
+        # <base href> changes what relative references resolve against, so
+        # resolve against it. The links written below are relative to the
+        # page's own file, and a base left in the output would re-base them.
+        base_tag = soup.find("base", href=True)
+        if base_tag is not None:
+            base_url = self._normalize_url(base_tag["href"], base_url)
+            del base_tag["href"]
+            if not base_tag.attrs:
+                base_tag.decompose()
+            self._resolve_against_base(soup, base_url)
 
         # Remove Wayback Machine banner, scripts, and styles
         elements_to_remove = []
@@ -1551,7 +1701,18 @@ class WaybackDownloader:
             # Preserve cookie consent scripts
             if "cookieyes" in src.lower() or "cookie-consent" in src.lower():
                 continue
-            if "web.archive.org" in src or "web-static.archive.org" in src or "bundle-playback.js" in src or "wombat.js" in src or "ruffle.js" in src:
+            # The toolbar is served from archive.org outside /web/ (today
+            # web-static.archive.org/_static/). The page's own scripts replay
+            # through web.archive.org/web/..., so that host alone says
+            # nothing: matching it deleted the site's scripts. A bare
+            # /static/js/ is the site's own (create-react-app bundles).
+            parsed_src = urlparse(src)
+            is_archive_host = (parsed_src.hostname or "").endswith("archive.org")
+            if (
+                (is_archive_host and not parsed_src.path.startswith("/web/"))
+                or src.startswith("/_static/")
+                or "bundle-playback.js" in src or "wombat.js" in src or "ruffle.js" in src
+            ):
                 script.decompose()
         
         # Remove wayback machine link tags by href (but keep internal links that need processing)
@@ -1627,9 +1788,7 @@ class WaybackDownloader:
                 if script.string:
                     script_text = script.string.lower()
                     # Only remove tracking scripts, not cookie consent functionality
-                    if any(pattern in script_text for pattern in self.TRACKER_PATTERNS + [
-                        "gtag", "datalayer", "google-analytics"
-                    ]):
+                    if any(marker in script_text for marker in self.TRACKER_INLINE_MARKERS):
                         # Skip cookieyes and cookie consent scripts - preserve them
                         if "cookieyes" not in script_text and "cookie consent" not in script_text:
                             script.decompose()
@@ -1679,6 +1838,9 @@ class WaybackDownloader:
                 continue
             href = link.get("href", "")
             if not href:
+                continue
+            # A same-page fragment or a script link names no other page.
+            if href.startswith("#") or href.strip().lower().startswith(("javascript:", "data:", "blob:", "about:")):
                 continue
             
             # Check if this link is inside a floating buttons container BEFORE processing
@@ -1842,26 +2004,51 @@ class WaybackDownloader:
                 if self.config.remove_external_links_remove_anchors:
                     link.decompose()
                 elif self.config.remove_external_links_keep_anchors:
-                    link["href"] = "#"
-                    # Keep the text but remove link
-                    text = link.get_text()
-                    link.replace_with(text)
+                    # Drop the link but keep what it wrapped: text, images, markup
+                    link.unwrap()
+                else:
+                    link["href"] = original_url
                 continue
 
             # Process internal links - normalize for final HTML output
             normalized_url = self._normalize_url(original_url, base_url)
+            # Normalizing drops the fragment; the link keeps it.
+            fragment = "#" + parsed_original.fragment if parsed_original.fragment else ""
             if self.config.make_internal_links_relative:
                 # Use _get_relative_link_path to ensure links match saved file paths
                 relative_path = self._get_relative_link_path(normalized_url, "page")
-                link["href"] = relative_path
+                link["href"] = relative_path + fragment
             else:
                 if self.config.make_non_www or self.config.make_www:
-                    link["href"] = normalized_url
+                    link["href"] = normalized_url + fragment
 
             # Add to links to follow - use original URL with query strings for downloading
             # Track by normalized URL to avoid downloading same file multiple times
             if normalized_url not in self.config.visited_urls:
                 links_to_follow.append(original_url)
+
+        # <meta http-equiv="refresh" content="5; url=...">: a redirect page.
+        # Rewrite its target like a link and keep the delay.
+        for meta in soup.find_all("meta", content=True):
+            if str(meta.get("http-equiv", "")).lower() != "refresh":
+                continue
+            match = re.match(r"^\s*(\d+)\s*[;,]\s*url\s*=\s*['\"]?(.*?)['\"]?\s*$", meta["content"], re.IGNORECASE)
+            if not match:
+                continue
+            delay, target = match.groups()
+            target = self._extract_original_url_from_path(target) or target
+            normalized_url = self._normalize_url(target, base_url)
+            if self._is_internal_url(normalized_url):
+                # Normalizing drops the fragment; the redirect keeps it.
+                fragment = urlparse(target).fragment
+                fragment = "#" + fragment if fragment else ""
+                if self.config.make_internal_links_relative:
+                    target = self._get_relative_link_path(normalized_url, "page") + fragment
+                else:
+                    target = normalized_url + fragment
+                if normalized_url not in self.config.visited_urls:
+                    links_to_follow.append(normalized_url)
+            meta["content"] = f"{delay}; url={target}"
 
         # Process images
         for img in soup.find_all("img", src=True):
@@ -1917,73 +2104,14 @@ class WaybackDownloader:
                 if normalized_url not in self.config.visited_urls:
                     links_to_follow.append(original_url)
 
-        # Process picture/source tags for responsive images
-        for picture in soup.find_all("picture"):
-            for source in picture.find_all("source", srcset=True):
-                srcset = source.get("srcset", "")
-                if not srcset:
-                    continue
-                # Rewrite srcset URLs - handle wayback URLs and convert to local paths
-                # Parse srcset manually (format: "url1 100w, url2 200w" or "url1 1x, url2 2x")
-                srcset_parts = []
-                for item in srcset.split(','):
-                    item = item.strip()
-                    if not item:
-                        continue
-                    # Split URL and descriptor (e.g., "url 500w" or "url?format=100w 100w")
-                    # Descriptor is at the end: space followed by number and 'w' or 'x'
-                    parts = re.split(r'\s+(\d+(?:\.\d+)?[xw])$', item, maxsplit=1)
-                    if len(parts) == 3:
-                        url_part, descriptor, _ = parts
-                        descriptor = f" {descriptor}"
-                    else:
-                        url_part = item
-                        descriptor = ""
-                    
-                    original_srcset = url_part
-                    # Extract wayback URL if present
-                    original = self._extract_original_url_from_path(url_part)
-                    if not original and "web.archive.org" in url_part:
-                        # Try to extract from absolute wayback URL - match the full URL including query strings
-                        wayback_match = re.search(r'/web/\d+[a-z]*(?:im_|cs_|js_|jm_)/(https?://[^\s"\'<>\)]+)', url_part)
-                        if wayback_match:
-                            original = wayback_match.group(1)
-                    
-                    if original:
-                        url_part = original
-                    
-                    normalized_srcset = self._normalize_url(url_part, base_url)
-                    is_squarespace_cdn = self._is_squarespace_cdn(normalized_srcset) or self._is_squarespace_cdn(original_srcset)
-                    
-                    # Queue for download if internal or Squarespace CDN
-                    if (self._is_internal_url(normalized_srcset) or is_squarespace_cdn) and normalized_srcset not in self.config.visited_urls:
-                        links_to_follow.append(url_part)
-                    
-                    # Rewrite to local path
-                    if self._is_internal_url(normalized_srcset) or is_squarespace_cdn:
-                        if is_squarespace_cdn:
-                            parsed_resource = urlparse(normalized_srcset)
-                            resource_path = f"{parsed_resource.netloc}{parsed_resource.path}"
-                            # Preserve query string if present
-                            if parsed_resource.query:
-                                resource_path += "?" + parsed_resource.query
-                            while resource_path.startswith("/"):
-                                resource_path = resource_path[1:]
-                            if self.config.make_internal_links_relative:
-                                srcset_parts.append(f"{self._to_relative_path(f'/{resource_path}')}{descriptor}")
-                            else:
-                                srcset_parts.append(f"{normalized_srcset}{descriptor}")
-                        else:
-                            relative_path = self._get_relative_link_path(normalized_srcset, "image")
-                            srcset_parts.append(f"{relative_path}{descriptor}")
-                    else:
-                        # Keep external URLs as-is
-                        srcset_parts.append(item)
-                
-                if srcset_parts:
-                    source["srcset"] = ", ".join(srcset_parts)
-            # The <img> inside a <picture> was already rewritten and queued by
-            # the img pass above; a second pass here re-queued its local path.
+        # Process srcset everywhere (img, picture > source, link
+        # imagesrcset, lazy-load data-srcset): every candidate is rewritten
+        # and downloaded, since the browser may pick any of them over src.
+        for attr_name in ("srcset", "imagesrcset", "data-srcset"):
+            for element in soup.find_all(attrs={attr_name: True}):
+                srcset = element.get(attr_name, "")
+                if isinstance(srcset, str) and srcset.strip():
+                    element[attr_name] = self._rewrite_srcset(srcset, base_url, links_to_follow)
 
         # Process CSS links
         for link in soup.find_all("link", rel="stylesheet", href=True):
@@ -2034,12 +2162,10 @@ class WaybackDownloader:
                             )
                         continue
                 
-                # Remove external links if configured
-                if self.config.remove_external_links_remove_anchors:
-                    link.decompose()
-                elif self.config.remove_external_links_keep_anchors:
-                    # Keep but remove wayback URLs - convert to direct external URL
-                    link["href"] = normalized_url if normalized_url.startswith(("http://", "https://")) else href
+                # A stylesheet is part of the page, not a link to another
+                # site: the external-link flags leave it. Drop the Wayback
+                # prefix, which points nowhere offline.
+                link["href"] = normalized_url if normalized_url.startswith(("http://", "https://")) else href
                 continue
 
             # Note what this is before the branch: with relative links off
@@ -2098,10 +2224,26 @@ class WaybackDownloader:
                 if "/web/" in original_xlink:
                     # Extract just the fragment part
                     if "#" in str(xlink_href):
-                        fragment = "#" + str(xlink_href).split("#", 1)[1]
+                        target, fragment = str(xlink_href).split("#", 1)
+                        fragment = "#" + fragment
                         # Remove query params from fragment if present
                         if "?" in fragment:
                             fragment = fragment.split("?")[0]
+                        # <use> can only point into an SVG document. A page
+                        # URL means a symbol on this page; anything else is a
+                        # sprite file, which is kept and downloaded.
+                        normalized_target = self._normalize_url(target, base_url)
+                        if (
+                            target
+                            and not self._is_html_url(normalized_target)
+                            and self._is_internal_url(normalized_target)
+                        ):
+                            if self.config.make_internal_links_relative:
+                                fragment = self._get_relative_link_path(normalized_target, "image") + fragment
+                            else:
+                                fragment = normalized_target + fragment
+                            if normalized_target not in self.config.visited_urls:
+                                links_to_follow.append(normalized_target)
                         use_elem["xlink:href"] = fragment
                         if use_elem.get("href"):
                             use_elem["href"] = fragment
@@ -2187,73 +2329,71 @@ class WaybackDownloader:
                 css_content = self._remove_corrupted_fonts_from_css(css_content)
                 style_tag.string = css_content
 
+        # The two passes below rewrite URLs left in any attribute. Whatever
+        # they point at locally has to be downloaded too, except navigation
+        # (<a>, <form>, <base>, <link>), which the passes above handle.
+        def rewrite_attr_url(element, attr_name, attr_value):
+            # Extract original URL if it's a wayback path
+            original = self._extract_original_url_from_path(attr_value)
+            if original:
+                attr_value = original
+
+            # Normalize and convert to relative path if internal or Squarespace CDN
+            normalized = self._normalize_url(attr_value, base_url)
+            is_sqcdn_norm = self._is_squarespace_cdn(normalized)
+            if not (self._is_internal_url(normalized) or is_sqcdn_norm):
+                return
+            # Normalizing drops the fragment (#team, a sprite's #icon); the
+            # attribute keeps it.
+            fragment = urlparse(attr_value).fragment
+            fragment = "#" + fragment if fragment else ""
+            kind = "image" if attr_name == "poster" or element.name in ("img", "image", "input") else "asset"
+            if self.config.make_internal_links_relative:
+                if is_sqcdn_norm:
+                    parsed_asset = urlparse(normalized)
+                    asset_path = f"{parsed_asset.netloc}{parsed_asset.path}"
+                    if parsed_asset.query:
+                        asset_path += "?" + parsed_asset.query
+                    while asset_path.startswith("/"):
+                        asset_path = asset_path[1:]
+                    element[attr_name] = self._to_relative_path(f"/{asset_path}") + fragment
+                else:
+                    element[attr_name] = self._get_relative_link_path(normalized, kind) + fragment
+            else:
+                # Keep normalized URL but ensure it uses the correct scheme
+                element[attr_name] = normalized + fragment
+                if kind == "image":
+                    self._note_reference_kind(normalized, kind)
+            if element.name not in ("a", "form", "base", "link") and normalized not in self.config.visited_urls:
+                links_to_follow.append(attr_value)
+
         # Process data-* attributes that contain URLs (e.g., data-video_src, data-src, data-href, etc.)
         # Convert domain URLs to relative paths to match Wayback Machine behavior
         for element in soup.find_all(True):  # All elements
             if not hasattr(element, 'attrs') or not element.attrs:
                 continue
-            for attr_name, attr_value in element.attrs.items():
-                if attr_name.startswith('data-') and isinstance(attr_value, str):
+            for attr_name, attr_value in list(element.attrs.items()):
+                if attr_name.startswith('data-') and isinstance(attr_value, str) and self._is_single_url_attr(attr_name, attr_value):
                     # Check if attribute contains a domain URL
                     if (self.config.domain and self.config.domain in attr_value) or self._is_squarespace_cdn(attr_value):
-                        # Extract original URL if it's a wayback path
-                        original = self._extract_original_url_from_path(attr_value)
-                        if original:
-                            attr_value = original
-                        
-                        # Normalize and convert to relative path if internal
-                        normalized = self._normalize_url(attr_value, base_url)
-                        is_squarespace_cdn = self._is_squarespace_cdn(normalized)
-                        if (self._is_internal_url(normalized) or is_squarespace_cdn) and self.config.make_internal_links_relative:
-                            # Convert to relative path
-                            if is_squarespace_cdn:
-                                parsed_asset = urlparse(normalized)
-                                asset_path = f"{parsed_asset.netloc}{parsed_asset.path}"
-                                if parsed_asset.query:
-                                    asset_path += "?" + parsed_asset.query
-                                while asset_path.startswith("/"):
-                                    asset_path = asset_path[1:]
-                                element[attr_name] = self._to_relative_path(f"/{asset_path}")
-                            else:
-                                relative_path = self._get_relative_link_path(normalized, "asset")
-                                element[attr_name] = relative_path
-                        elif self._is_internal_url(normalized) or is_squarespace_cdn:
-                            # Keep normalized URL but ensure it uses the correct scheme
-                            element[attr_name] = normalized
+                        rewrite_attr_url(element, attr_name, attr_value.strip())
 
         # Convert any remaining domain references in text content and attributes to relative paths
         # This handles cases where domain URLs appear in href, src, or other attributes
-        parsed_base = urlparse(base_url)
-        base_domain = parsed_base.netloc.lower().removeprefix("www.")
+        # The page's host, not the <base> one: a base on another host would
+        # otherwise stop this pass from seeing the site's own URLs.
+        base_domain = urlparse(self._current_page_url).netloc.lower().removeprefix("www.")
         
         for element in soup.find_all(True):  # All elements
             for attr_name, attr_value in list(element.attrs.items()):
-                if isinstance(attr_value, str) and (base_domain in attr_value.lower() or self._is_squarespace_cdn(attr_value) or "web.archive.org" in attr_value or attr_value.startswith("/web/")):
+                if not (isinstance(attr_value, str) and self._is_single_url_attr(attr_name, attr_value)):
+                    continue
+                attr_value = attr_value.strip()
+                if base_domain in attr_value.lower() or self._is_squarespace_cdn(attr_value) or "web.archive.org" in attr_value or attr_value.startswith("/web/"):
                     # Check if it's a full URL with the domain or a Squarespace CDN URL
                     is_squarespace_cdn = self._is_squarespace_cdn(attr_value)
                     if attr_value.startswith(("http://", "https://", "/web/")) or is_squarespace_cdn or "web.archive.org" in attr_value:
-                        # Extract original URL if it's a wayback path
-                        original = self._extract_original_url_from_path(attr_value)
-                        if original:
-                            attr_value = original
-                        
-                        # Normalize and convert to relative path if internal or Squarespace CDN
-                        normalized = self._normalize_url(attr_value, base_url)
-                        is_sqcdn_norm = self._is_squarespace_cdn(normalized)
-                        if (self._is_internal_url(normalized) or is_sqcdn_norm) and self.config.make_internal_links_relative:
-                            if is_sqcdn_norm:
-                                parsed_asset = urlparse(normalized)
-                                asset_path = f"{parsed_asset.netloc}{parsed_asset.path}"
-                                if parsed_asset.query:
-                                    asset_path += "?" + parsed_asset.query
-                                while asset_path.startswith("/"):
-                                    asset_path = asset_path[1:]
-                                element[attr_name] = self._to_relative_path(f"/{asset_path}")
-                            else:
-                                relative_path = self._get_relative_link_path(normalized, "asset")
-                                element[attr_name] = relative_path
-                        elif self._is_internal_url(normalized) or is_sqcdn_norm:
-                            element[attr_name] = normalized
+                        rewrite_attr_url(element, attr_name, attr_value)
 
         # Get processed HTML
         processed_html = str(soup)
@@ -2687,8 +2827,9 @@ class WaybackDownloader:
                         "image/gif": "GIF",
                         "image/webp": "WEBP",
                     }
-                    img_format = format_map.get(content_type, "JPEG")
-                    optimized = self._optimize_image(content, img_format)
+                    img_format = format_map.get(content_type)
+                    # Anything else (.ico, .svg, .bmp) is written as it came.
+                    optimized = self._optimize_image(content, img_format) if img_format else content
 
                     with open(local_path, "wb") as f:
                         f.write(optimized)
