@@ -8,8 +8,6 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    env:
-      PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
 
     steps:
     - uses: actions/checkout@v7
@@ -46,13 +44,15 @@ jobs:
         path: dist/*
         if-no-files-found: error
 
+    # The token lives in this step only: a job-level env would hand it to
+    # every step above, including pip installs and the build backend.
     - name: Publish to PyPI
-      if: ${{ env.PYPI_TOKEN != '' }}
       env:
         TWINE_USERNAME: __token__
         TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
-      run: twine upload dist/*
-
-    - name: Skip PyPI publish
-      if: ${{ env.PYPI_TOKEN == '' }}
-      run: echo "::warning::PYPI_API_TOKEN is not set — built but not published to PyPI."
+      run: |
+        if [ -z "$TWINE_PASSWORD" ]; then
+          echo "::warning::PYPI_API_TOKEN is not set — built but not published to PyPI."
+          exit 0
+        fi
+        twine upload dist/*
