@@ -379,12 +379,12 @@ class TestCssStylesheetLinks:
         assert any("squarespace" in l for l in links)
 
     def test_external_stylesheet_remove_anchors(self):
-        """External stylesheets with remove_anchors should be decomposed."""
+        """External stylesheets are kept with remove_anchors: they are not links."""
         self.dl.config.remove_external_links_keep_anchors = False
         self.dl.config.remove_external_links_remove_anchors = True
         html = '<html><head><link rel="stylesheet" href="http://cdn.other.com/style.css"></head><body>Test</body></html>'
         processed, _ = self.dl._process_html(html, "http://example.com/")
-        assert "cdn.other.com" not in processed
+        assert "href=http://cdn.other.com/style.css" in processed
 
     def test_internal_stylesheet_not_relative(self):
         """Internal stylesheet when make_internal_links_relative=False."""

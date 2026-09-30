@@ -2120,12 +2120,10 @@ class WaybackDownloader:
                             )
                         continue
                 
-                # Remove external links if configured
-                if self.config.remove_external_links_remove_anchors:
-                    link.decompose()
-                elif self.config.remove_external_links_keep_anchors:
-                    # Keep but remove wayback URLs - convert to direct external URL
-                    link["href"] = normalized_url if normalized_url.startswith(("http://", "https://")) else href
+                # A stylesheet is part of the page, not a link to another
+                # site: the external-link flags leave it. Drop the Wayback
+                # prefix, which points nowhere offline.
+                link["href"] = normalized_url if normalized_url.startswith(("http://", "https://")) else href
                 continue
 
             # Note what this is before the branch: with relative links off

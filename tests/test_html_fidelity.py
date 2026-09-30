@@ -317,3 +317,16 @@ class TestSvgUseSprites:
         assert use["xlink:href"] == "#email-icon"
         assert use["href"] == "#email-icon"
         assert links == []
+
+
+class TestExternalStylesheets:
+    """The external-link flags are about links, not a page's stylesheets."""
+
+    @pytest.mark.parametrize("keep,remove", [("true", "true"), ("false", "false")])
+    def test_external_stylesheet_survives_with_its_live_url(self, keep, remove):
+        dl = _make_dl(REMOVE_EXTERNAL_LINKS_KEEP_ANCHORS=keep, REMOVE_EXTERNAL_LINKS_REMOVE_ANCHORS=remove)
+        soup, _ = _process(dl, (
+            f'<html><head><link rel="stylesheet" href="{W}cs_/https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/css/bootstrap.min.css">'
+            '</head><body></body></html>'
+        ))
+        assert soup.link["href"] == "https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/css/bootstrap.min.css"
