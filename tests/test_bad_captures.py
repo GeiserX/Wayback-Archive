@@ -429,8 +429,31 @@ class TestThrottling:
             dl.download()
         pages = {url.rsplit("/", 1)[-1] for url, _ in dl.session.get.calls if "/p" in url}
         assert len(pages) == 5
-        assert len(dl.session.get.calls) <= 1 + 5 * 2
+        # One request per refused page: the plain URL would be refused too.
+        assert len(dl.session.get.calls) == 1 + 5
         assert (tmp_path / "out" / "index.html").exists()
+
+    def test_files_saved_from_the_cdn_are_not_refusals(self, tmp_path):
+        """Wayback does not answer, but every file comes from its CDN."""
+        links = "".join(
+            f'<link rel="stylesheet" href="https://fonts.googleapis.com/css?family=F{n}">' for n in range(8)
+        )
+        start = f"<!DOCTYPE html><html><head>{links}</head><body></body></html>".encode()
+        dl = _make_downloader(output_dir=tmp_path / "out")
+
+        def handler(url, kwargs):
+            if url.endswith("/http://example.com/"):
+                return _Response(200, start)
+            if url.startswith("https://fonts.googleapis.com/"):
+                return _Response(200, b"body{color:red}", url=url)
+            raise requests.exceptions.ConnectTimeout("no answer")
+
+        dl.session.get = _Recorder(handler)
+        dl.download()
+        live = [url for url, _ in dl.session.get.calls if url.startswith("https://fonts.googleapis.com/")]
+        assert len(live) == 8
+        saved = [p for p in (tmp_path / "out").rglob("*") if p.is_file() and p.name != "index.html"]
+        assert len(saved) == 8
 
     def test_a_success_resets_the_count(self, tmp_path):
         """Four refusals, a success, four more: the run goes on to the end."""

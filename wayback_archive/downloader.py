@@ -2392,16 +2392,8 @@ class WaybackDownloader:
             self.config.visited_urls.add(normalized_for_tracking)
 
             content = self.download_file(url)
-            if self._last_failure:
-                consecutive_refusals += 1
-                if consecutive_refusals >= self.MAX_CONSECUTIVE_REFUSALS:
-                    files_failed += 1
-                    stop_reason = (
-                        f"Stopped: the Wayback Machine refused {consecutive_refusals} requests in a row "
-                        f"(last: {self._last_failure}); try again later"
-                    )
-                    break
-            else:
+            refusal = self._last_failure
+            if content or not refusal:
                 consecutive_refusals = 0
             if not content:
                 # Try CDN fallback for critical jQuery files if Wayback fails:
@@ -2418,6 +2410,15 @@ class WaybackDownloader:
                 if not content:
                     files_failed += 1
                     print(f"         ⚠️  Failed to download", flush=True)
+                    # Only a file no fallback could save counts as refused.
+                    if refusal:
+                        consecutive_refusals += 1
+                        if consecutive_refusals >= self.MAX_CONSECUTIVE_REFUSALS:
+                            stop_reason = (
+                                f"Stopped: the Wayback Machine refused {consecutive_refusals} requests in a row "
+                                f"(last: {refusal}); try again later"
+                            )
+                            break
                     continue
 
             if self._is_html_instead_of_asset(content, url):
