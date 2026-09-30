@@ -113,6 +113,9 @@ class WaybackDownloader:
         )
         # Track corrupted font files (HTML error pages instead of actual fonts)
         self.corrupted_fonts: Set[str] = set()
+        # Font URLs already probed this run, so each is fetched at most once
+        # however many stylesheets name it.
+        self._probed_fonts: Set[str] = set()
         # How each stored path was first referenced, so the extension a URL
         # gets is decided once and every later lookup agrees with it.
         self._path_kinds: Dict[str, str] = {}
@@ -926,27 +929,17 @@ class WaybackDownloader:
         This checks font files referenced in CSS to see if they're HTML error pages,
         even before they're queued for download.
         """
-        # Find all font URLs in CSS
-        font_url_pattern = r'url\s*\(\s*["\']?([^"\']*\.(?:woff|woff2|ttf|eot|otf|svg))["\']?\s*\)'
-        font_urls = re.findall(font_url_pattern, css, re.IGNORECASE)
-        
-        for font_url in font_urls:
-            # Convert relative URLs to absolute
-            if not font_url.startswith(('http://', 'https://')):
-                # Try to construct absolute URL
-                if font_url.startswith('/'):
-                    # Absolute path from domain
-                    font_url = f"{self.config.base_url.rstrip('/')}{font_url}"
-                else:
-                    # Relative path
-                    font_url = urljoin(base_url, font_url)
-            
-            # Normalize URL
-            normalized_font_url = self._normalize_url(font_url, base_url)
-            
-            # Skip if already in corrupted set
-            if normalized_font_url in self.corrupted_fonts:
+        # Probe the absolute URLs the stylesheet names, before the rewrite
+        # turns them into local paths that no longer say which host they are on
+        font_extensions = ('.woff', '.woff2', '.ttf', '.eot', '.otf', '.svg')
+        for font_url in self._extract_css_urls(css, base_url):
+            if not font_url.lower().endswith(font_extensions):
                 continue
+
+            # Skip if already known corrupted or already probed this run
+            if font_url in self.corrupted_fonts or font_url in self._probed_fonts:
+                continue
+            self._probed_fonts.add(font_url)
             
             # Try to download and check if corrupted (with quick timeout)
             try:
@@ -954,7 +947,7 @@ class WaybackDownloader:
                 response = self.session.get(wayback_url, timeout=5, allow_redirects=True)
                 if response.status_code == 200:
                     if self._is_corrupted_font(response.content, font_url):
-                        self.corrupted_fonts.add(normalized_font_url)
+                        self.corrupted_fonts.add(font_url)
                         print(f"         ⚠️  Detected corrupted font in CSS: {os.path.basename(font_url)}", flush=True)
             except Exception as e:
                 # If we can't check, skip - it will be checked when actually downloaded
@@ -974,47 +967,19 @@ class WaybackDownloader:
         
         # For each corrupted font, remove its references from CSS
         for corrupted_font_url in self.corrupted_fonts:
-            # Extract just the filename from the URL
-            parsed = urlparse(corrupted_font_url)
-            font_filename = os.path.basename(parsed.path)
-            # Also get the path relative to domain (for matching in CSS)
-            font_path = parsed.path.lstrip('/')
-            
+            font_filename = os.path.basename(urlparse(corrupted_font_url).path)
             if not font_filename:
                 continue
-            
-            # Remove url() references to this font file
-            # CSS might have relative paths like /templates/.../fontname.ext
-            # We need to match the path as it appears in CSS (usually relative to root)
-            # The font_path is like "templates/shaper_fixter/fonts/fa-brands-400.eot"
-            # But CSS might have "/templates/shaper_fixter/fonts/fa-brands-400.eot"
-            
-            # Try matching with leading slash
-            css_path_with_slash = '/' + font_path
-            # Try matching without leading slash (already handled by font_path)
-            
-            patterns = [
-                # Match full path with leading slash: url(/templates/.../fontname.ext)
-                rf'url\s*\(\s*["\']?[^"\']*{re.escape(css_path_with_slash)}["\']?\s*\)',
-                # Match full path without leading slash
-                rf'url\s*\(\s*["\']?[^"\']*{re.escape(font_path)}["\']?\s*\)',
-                # Match just filename: url(...fontname.ext)
-                rf'url\s*\(\s*["\']?[^"\']*{re.escape(font_filename)}["\']?\s*\)',
-                # Match with format: url(...fontname.ext) format("...")
-                rf'url\s*\(\s*["\']?[^"\']*{re.escape(font_filename)}["\']?\s*\)\s+format\s*\([^)]+\)',
-                # Match with format and full path (with slash)
-                rf'url\s*\(\s*["\']?[^"\']*{re.escape(css_path_with_slash)}["\']?\s*\)\s+format\s*\([^)]+\)',
-                # Match with format and full path (without slash)
-                rf'url\s*\(\s*["\']?[^"\']*{re.escape(font_path)}["\']?\s*\)\s+format\s*\([^)]+\)',
-            ]
-            
-            for pattern in patterns:
-                css = re.sub(pattern, '', css, flags=re.IGNORECASE)
-            
-            # Also remove standalone src:url(...fontname.ext); lines
-            css = re.sub(rf'src:\s*url\s*\(\s*["\']?[^"\']*{re.escape(font_filename)}["\']?\s*\)\s*;', '', css, flags=re.IGNORECASE)
-            css = re.sub(rf'src:\s*url\s*\(\s*["\']?[^"\']*{re.escape(css_path_with_slash)}["\']?\s*\)\s*;', '', css, flags=re.IGNORECASE)
-            css = re.sub(rf'src:\s*url\s*\(\s*["\']?[^"\']*{re.escape(font_path)}["\']?\s*\)\s*;', '', css, flags=re.IGNORECASE)
+
+            # One url() entry naming this file in any directory, with its
+            # query or fragment, its format() and the comma joining it to the
+            # entry before. [^"'()] keeps a match inside its own url(), so it
+            # cannot run on into the rules that follow.
+            pattern = (
+                rf'(?:,\s*)?url\s*\(\s*["\']?(?:[^"\'()]*/)?{re.escape(font_filename)}'
+                rf'(?:[?#][^"\'()]*)?["\']?\s*\)(?:\s*format\s*\([^)]*\))?'
+            )
+            css = re.sub(pattern, '', css, flags=re.IGNORECASE)
         
         # Clean up any double commas or trailing commas
         css = re.sub(r',\s*,+', ',', css)  # Multiple commas
@@ -1031,14 +996,14 @@ class WaybackDownloader:
         and modern browsers don't need them - they'll use .woff2, .woff, and .ttf.
         """
         # Remove .eot references (with or without format)
-        css = re.sub(r',\s*url\s*\(\s*["\']?[^"\']*\.eot["\']?\s*\)\s*(?:format\s*\([^)]+\))?', '', css, flags=re.IGNORECASE)
-        css = re.sub(r'url\s*\(\s*["\']?[^"\']*\.eot["\']?\s*\)\s*(?:format\s*\([^)]+\))?', '', css, flags=re.IGNORECASE)
-        css = re.sub(r'src:\s*url\s*\(\s*["\']?[^"\']*\.eot["\']?\s*\)\s*;', '', css, flags=re.IGNORECASE)
+        css = re.sub(r',\s*url\s*\(\s*["\']?[^"\'()]*\.eot["\']?\s*\)\s*(?:format\s*\([^)]+\))?', '', css, flags=re.IGNORECASE)
+        css = re.sub(r'url\s*\(\s*["\']?[^"\'()]*\.eot["\']?\s*\)\s*(?:format\s*\([^)]+\))?', '', css, flags=re.IGNORECASE)
+        css = re.sub(r'src:\s*url\s*\(\s*["\']?[^"\'()]*\.eot["\']?\s*\)\s*;', '', css, flags=re.IGNORECASE)
         
         # Remove .svg font format references (but keep .svg images)
         # Only remove if it's in a font context (has format("svg") or in @font-face)
-        css = re.sub(r',\s*url\s*\(\s*["\']?[^"\']*\.svg["\']?\s*\)\s+format\s*\(["\']?svg["\']?\)', '', css, flags=re.IGNORECASE)
-        css = re.sub(r'url\s*\(\s*["\']?[^"\']*\.svg["\']?\s*\)\s+format\s*\(["\']?svg["\']?\)', '', css, flags=re.IGNORECASE)
+        css = re.sub(r',\s*url\s*\(\s*["\']?[^"\'()]*\.svg["\']?\s*\)\s+format\s*\(["\']?svg["\']?\)', '', css, flags=re.IGNORECASE)
+        css = re.sub(r'url\s*\(\s*["\']?[^"\'()]*\.svg["\']?\s*\)\s+format\s*\(["\']?svg["\']?\)', '', css, flags=re.IGNORECASE)
         
         # Clean up any double commas or trailing commas
         css = re.sub(r',\s*,+', ',', css)  # Multiple commas
@@ -2329,6 +2294,11 @@ class WaybackDownloader:
                                     if is_google_font:
                                         print(f"         📥 Queued Google Font file for download: {css_url[:80]}...", flush=True)
                         
+                        # Check font URLs in CSS and detect corrupted ones proactively,
+                        # while the CSS still names the real URLs. This ensures we
+                        # catch corrupted fonts even if they haven't been downloaded yet
+                        css = self._check_and_remove_corrupted_fonts_in_css(css, url)
+
                         # Rewrite URLs in CSS to relative paths. A stylesheet's
                         # url() references resolve against the stylesheet's own
                         # location, so make that the current page for the
@@ -2340,10 +2310,6 @@ class WaybackDownloader:
                             css = self._rewrite_css_urls(css, url)
                         finally:
                             self._current_page_url = previous_page_url
-                        
-                        # Check font URLs in CSS and detect corrupted ones proactively
-                        # This ensures we catch corrupted fonts even if they haven't been downloaded yet
-                        css = self._check_and_remove_corrupted_fonts_in_css(css, url)
                         
                         # Remove references to already-detected corrupted fonts
                         css = self._remove_corrupted_fonts_from_css(css)

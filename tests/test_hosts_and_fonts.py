@@ -306,3 +306,177 @@ class TestLiveFallbackIsCdnOnly:
         assert live == ["https://code.jquery.com/jquery-3.7.1.min.js"]
         assert all(kw.get("allow_redirects") is False for _, kw in dl.session.live_calls())
         assert (output_dir / "js/jquery.min.js").read_bytes().startswith(b"LIVE:https://code.jquery.com/")
+
+
+# Rewritten CSS always has unquoted url(), and minifiers drop the quotes
+# around single-word font names, so nothing stops a match at a quote.
+REWRITTEN_CSS = (
+    'body{font-family:"Open Sans"}'
+    ".hero{background:url(../img/hero.jpg) center/cover}"
+    ".logo{background:url(../img/logo.png)}"
+    "@font-face{font-family:MyFont;src:url(../fonts/my.eot);"
+    'src:url(../fonts/my.woff2) format("woff2"),url(../fonts/my.woff) format("woff")}'
+)
+
+GLYPHICONS = (
+    "@font-face{font-family:'Glyphicons Halflings';"
+    "src:url(../fonts/glyphicons-halflings-regular.eot);"
+    "src:url(../fonts/glyphicons-halflings-regular.eot?#iefix) format('embedded-opentype'),"
+    "url(../fonts/glyphicons-halflings-regular.woff2) format('woff2'),"
+    "url(../fonts/glyphicons-halflings-regular.woff) format('woff'),"
+    "url(../fonts/glyphicons-halflings-regular.ttf) format('truetype')}"
+)
+
+
+class TestFontCleanupKeepsTheRestOfTheCss:
+    def test_legacy_removal_does_not_cross_rules(self):
+        css = ".a{background:url(a.png)}.b{color:red}@font-face{font-family:F;src:url(f.eot)}"
+        result = _make_downloader()._remove_legacy_font_formats_from_css(css)
+        assert "url(a.png)" in result
+        assert ".b{color:red}" in result
+        assert "@font-face{font-family:F;" in result
+        assert ".eot" not in result
+
+    def test_legacy_removal_on_rewritten_css(self):
+        result = _make_downloader()._remove_legacy_font_formats_from_css(REWRITTEN_CSS)
+        assert result == REWRITTEN_CSS.replace("src:url(../fonts/my.eot);", "")
+
+    def test_corrupted_font_removal_on_rewritten_css(self):
+        dl = _make_downloader()
+        dl.corrupted_fonts.add("http://example.com/fonts/my.woff2")
+        result = dl._remove_corrupted_fonts_from_css(REWRITTEN_CSS)
+        assert result == REWRITTEN_CSS.replace(
+            'src:url(../fonts/my.woff2) format("woff2"),', "src:"
+        )
+
+    def test_corrupted_font_matches_the_whole_file_name(self):
+        dl = _make_downloader()
+        dl.corrupted_fonts.add("http://example.com/fonts/regular.woff")
+        css = "@font-face{src:url(../x/bold-regular.woff) format('woff')}"
+        assert dl._remove_corrupted_fonts_from_css(css) == css
+
+    def test_corrupted_font_with_a_query_string_is_removed(self):
+        dl = _make_downloader()
+        dl.corrupted_fonts.add("http://example.com/fonts/x.woff2")
+        css = "@font-face{src:url(/fonts/x.woff2?v=3) format('woff2'),url(/fonts/x.woff) format('woff')}"
+        assert dl._remove_corrupted_fonts_from_css(css) == (
+            "@font-face{src:url(/fonts/x.woff) format('woff')}"
+        )
+
+    def test_removed_font_takes_its_format_with_it(self):
+        dl = _make_downloader()
+        dl.corrupted_fonts.add(
+            "http://example.com/fonts/glyphicons-halflings-regular.woff2"
+        )
+        result = dl._remove_legacy_font_formats_from_css(
+            dl._remove_corrupted_fonts_from_css(GLYPHICONS)
+        )
+        assert ", format(" not in result
+        assert "format('woff2')" not in result
+        assert "url(../fonts/glyphicons-halflings-regular.woff) format('woff')" in result
+        assert "url(../fonts/glyphicons-halflings-regular.ttf) format('truetype')" in result
+
+    def test_url_patterns_cannot_run_past_the_closing_paren(self, monkeypatch):
+        """Structural guard against the quadratic scan, without timing.
+
+        Every url() pattern must stop its unbounded character classes at ')'.
+        A class that only stops at a quote runs to the end of the file from
+        each url( it tries, which is quadratic and swallows neighbouring rules.
+        """
+        import re as real_re
+        import wayback_archive.downloader as module
+
+        seen = []
+
+        class Recorder:
+            def __getattr__(self, name):
+                return getattr(real_re, name)
+
+            def sub(self, pattern, *args, **kwargs):
+                seen.append(pattern)
+                return real_re.sub(pattern, *args, **kwargs)
+
+            def findall(self, pattern, *args, **kwargs):
+                seen.append(pattern)
+                return real_re.findall(pattern, *args, **kwargs)
+
+            def finditer(self, pattern, *args, **kwargs):
+                seen.append(pattern)
+                return real_re.finditer(pattern, *args, **kwargs)
+
+        dl = _make_downloader()
+        dl.session.get = lambda *a, **k: _Response(404)
+        dl.corrupted_fonts.add("http://example.com/fonts/my.woff2")
+        monkeypatch.setattr(module, "re", Recorder())
+        dl._check_and_remove_corrupted_fonts_in_css(REWRITTEN_CSS, "http://example.com/css/s.css")
+        dl._remove_corrupted_fonts_from_css(REWRITTEN_CSS)
+        dl._remove_legacy_font_formats_from_css(REWRITTEN_CSS)
+        monkeypatch.undo()
+
+        url_patterns = [p for p in seen if "url" in p]
+        assert url_patterns
+        for pattern in url_patterns:
+            for negated in real_re.findall(r"\[\^((?:\\.|[^\]])*)\][*+]", pattern):
+                assert ")" in negated, pattern
+
+    def test_large_plain_stylesheet_passes_through_unchanged(self):
+        css = "".join(f".c{i}{{background:url(img/a{i}.png)}}" for i in range(4000))
+        dl = _make_downloader()
+        dl.session.get = lambda *a, **k: pytest.fail("no font to probe")
+        dl.corrupted_fonts.add("http://example.com/fonts/my.woff2")
+        assert dl._check_and_remove_corrupted_fonts_in_css(css, "http://example.com/s.css") == css
+        assert dl._remove_corrupted_fonts_from_css(css) == css
+        assert dl._remove_legacy_font_formats_from_css(css) == css
+
+
+class TestFontProbe:
+    def _downloader(self):
+        dl = _make_downloader()
+        dl.session = _FakeSession({})
+        dl.session.get = lambda url, **kw: (
+            dl.session.calls.append((url, kw)) or _Response(200, b"wOF2" + b"\0" * 100)
+        )
+        return dl
+
+    def test_each_unquoted_font_is_probed_on_its_own(self):
+        dl = self._downloader()
+        dl._check_and_remove_corrupted_fonts_in_css(
+            "a{src:url(/f/a.woff2)}b{src:url(/f/b.woff)}", "http://example.com/s.css"
+        )
+        probed = [url for url, _ in dl.session.calls]
+        assert len(probed) == 2
+        assert probed[0].endswith("/http://example.com/f/a.woff2")
+        assert probed[1].endswith("/http://example.com/f/b.woff")
+
+    def test_a_font_is_probed_once_per_run(self):
+        dl = self._downloader()
+        css = "@font-face{src:url(/f/a.woff2)}"
+        dl._check_and_remove_corrupted_fonts_in_css(css, "http://example.com/one.css")
+        dl._check_and_remove_corrupted_fonts_in_css(css, "http://example.com/two.css")
+        assert len(dl.session.calls) == 1
+
+    def test_corrupted_google_font_is_removed_from_the_saved_stylesheet(self, tmp_path):
+        """The probe used to run on rewritten CSS, where the Google font had
+        become a local path, so it probed example.com/fonts.gstatic.com/... and
+        the corruption was only found after the stylesheet was saved."""
+        output_dir = tmp_path / "out"
+        dl = _make_downloader(output_dir=output_dir)
+        font = "https://fonts.gstatic.com/s/r/v30/x.woff2"
+        dl.session = _FakeSession(
+            {
+                "http://example.com/": b'<html><head><link rel="stylesheet" '
+                b'href="http://example.com/s.css"></head><body></body></html>',
+                "http://example.com/s.css": b"@font-face{font-family:R;src:url("
+                + font.encode()
+                + b") format('woff2')}p{color:red}",
+                font: b"<!DOCTYPE html><html><body>error</body></html>",
+            }
+        )
+        with contextlib.redirect_stdout(io.StringIO()):
+            dl.download()
+        saved = (output_dir / "s.css").read_text()
+        assert "x.woff2" not in saved
+        assert "p{color:red}" in saved
+        assert not any(
+            "example.com/fonts.gstatic.com" in url for url, _ in dl.session.calls
+        )
