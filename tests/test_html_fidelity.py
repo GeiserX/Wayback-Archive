@@ -266,3 +266,29 @@ class TestAnchors:
         dl = _make_dl(REMOVE_EXTERNAL_LINKS_KEEP_ANCHORS="false")
         soup, _ = _process(dl, f'<html><body><a href="{W}/https://twitter.com/site">t</a></body></html>')
         assert soup.a["href"] == "https://twitter.com/site"
+
+
+class TestBaseHref:
+    """<base href> is honoured while resolving, then dropped from the output,
+    since every link written is relative to the page's own file."""
+
+    def test_base_href_resolves_links_and_is_removed(self):
+        dl = _make_dl()
+        soup, links = _process(dl, (
+            f'<html><head><base href="{W}/https://site.com/" target="_blank"></head><body>'
+            '<a href="other.html">o</a><img src="img/a.jpg">'
+            f'<a href="{W}/https://site.com/blog/sibling.html">s</a>'
+            '</body></html>'
+        ), page="https://site.com/blog/post")
+        assert soup.base is None or not soup.base.has_attr("href")
+        assert soup.base["target"] == "_blank"
+        assert soup.find("a", string="o")["href"] == "../other.html"
+        assert soup.find("a", string="s")["href"] == "sibling.html"
+        assert soup.img["src"] == "../img/a.jpg"
+        assert "https://site.com/other.html" in links
+        assert "https://site.com/img/a.jpg" in links
+
+    def test_base_without_other_attributes_is_removed(self):
+        dl = _make_dl()
+        soup, _ = _process(dl, f'<html><head><base href="{W}/https://site.com/"></head><body></body></html>')
+        assert soup.base is None

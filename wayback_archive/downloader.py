@@ -1632,6 +1632,16 @@ class WaybackDownloader:
         soup = BeautifulSoup(html, "lxml")
         links_to_follow: List[str] = []
 
+        # <base href> changes what relative references resolve against, so
+        # resolve against it. The links written below are relative to the
+        # page's own file, and a base left in the output would re-base them.
+        base_tag = soup.find("base", href=True)
+        if base_tag is not None:
+            base_url = self._normalize_url(base_tag["href"], base_url)
+            del base_tag["href"]
+            if not base_tag.attrs:
+                base_tag.decompose()
+
         # Remove Wayback Machine banner, scripts, and styles
         elements_to_remove = []
         for element in soup.find_all(["iframe", "div", "script", "link"], id=True):
