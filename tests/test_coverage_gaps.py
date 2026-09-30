@@ -1121,8 +1121,8 @@ class TestImageOptimization:
         _cleanup()
         os.environ.pop("OPTIMIZE_IMAGES", None)
 
-    def test_optimize_jpeg_rgba_conversion(self):
-        """RGBA images should be converted to RGB for JPEG."""
+    def test_optimize_png_asked_as_jpeg_is_left_alone(self):
+        """A PNG is never re-encoded as JPEG: that drops its transparency."""
         from PIL import Image
         from io import BytesIO
         # Create an RGBA image
@@ -1131,10 +1131,21 @@ class TestImageOptimization:
         img.save(buf, format="PNG")
         content = buf.getvalue()
         result = self.dl._optimize_image(content, "JPEG")
-        assert len(result) > 0
+        assert result == content
 
-    def test_optimize_non_rgb_mode_conversion(self):
-        """Non-RGB/non-L mode images should be converted to RGB."""
+    def test_optimize_cmyk_jpeg_conversion(self):
+        """A CMYK JPEG is converted to RGB."""
+        from PIL import Image
+        from io import BytesIO
+        img = Image.new("CMYK", (64, 64), (0, 255, 255, 0))
+        buf = BytesIO()
+        img.save(buf, format="JPEG", quality=100)
+        content = buf.getvalue()
+        result = self.dl._optimize_image(content, "JPEG")
+        assert Image.open(BytesIO(result)).mode == "RGB"
+
+    def test_optimize_palette_png_keeps_its_mode(self):
+        """A palette (P) PNG stays a palette PNG."""
         from PIL import Image
         from io import BytesIO
         # Create a palette (P) mode image
@@ -1143,7 +1154,7 @@ class TestImageOptimization:
         img.save(buf, format="PNG")
         content = buf.getvalue()
         result = self.dl._optimize_image(content, "PNG")
-        assert len(result) > 0
+        assert Image.open(BytesIO(result)).mode == "P"
 
     def test_optimize_l_mode_preserved(self):
         """L (grayscale) mode images should be processed without conversion."""

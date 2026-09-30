@@ -424,3 +424,44 @@ class TestJsUrlExtraction:
     ])
     def test_extract(self, js, expected):
         assert _make_dl()._extract_js_urls(js, "https://site.com/js/a.js") == expected
+
+
+class TestOptimizeImagesKeepsWhatImagesAre:
+    """OPTIMIZE_IMAGES compresses; it never drops alpha, frames or formats."""
+
+    @staticmethod
+    def _encode(img, fmt, **kwargs):
+        from io import BytesIO
+        buf = BytesIO()
+        img.save(buf, format=fmt, **kwargs)
+        return buf.getvalue()
+
+    def test_png_keeps_transparency(self):
+        from io import BytesIO
+        from PIL import Image
+        dl = _make_dl(OPTIMIZE_IMAGES="true")
+        content = self._encode(Image.new("RGBA", (64, 64), (255, 0, 0, 0)), "PNG")
+        out = Image.open(BytesIO(dl._optimize_image(content, "PNG")))
+        assert out.mode == "RGBA"
+        assert out.getpixel((0, 0))[3] == 0
+
+    def test_animated_gif_is_left_alone(self):
+        from PIL import Image
+        dl = _make_dl(OPTIMIZE_IMAGES="true")
+        frames = [Image.new("P", (8, 8), i * 40) for i in range(5)]
+        content = self._encode(frames[0], "GIF", save_all=True, append_images=frames[1:])
+        assert dl._optimize_image(content, "GIF") == content
+
+    def test_favicon_is_saved_as_the_icon_it_is(self, tmp_path):
+        import contextlib
+        import io
+        from PIL import Image
+        dl = _make_dl(OPTIMIZE_IMAGES="true")
+        dl.config.output_dir = str(tmp_path)
+        ico = self._encode(Image.new("RGBA", (16, 16), (0, 0, 255, 128)), "ICO")
+        page = b'<html><head><link rel="icon" href="/favicon.ico"></head><body>x</body></html>'
+        bodies = {"https://site.com/": page, "https://site.com/favicon.ico": ico}
+        dl.download_file = lambda url: bodies.get(url)
+        with contextlib.redirect_stdout(io.StringIO()):
+            dl.download()
+        assert (tmp_path / "favicon.ico").read_bytes() == ico

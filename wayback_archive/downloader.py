@@ -1532,18 +1532,22 @@ class WaybackDownloader:
             from io import BytesIO
 
             img = Image.open(BytesIO(content))
-            
-            # Convert RGBA to RGB for JPEG
-            if format.upper() == "JPEG" and img.mode == "RGBA":
-                background = Image.new("RGB", img.size, (255, 255, 255))
-                background.paste(img, mask=img.split()[3])
-                img = background
-            elif img.mode not in ("RGB", "L"):
+
+            # Only re-encode a still image into the format it already is: a
+            # favicon.ico came out as JPEG bytes, and an animated GIF as its
+            # first frame.
+            if (img.format or "").upper() != format.upper() or getattr(img, "is_animated", False):
+                return content
+
+            # Convert only for JPEG (a CMYK one, say); PNG, GIF and WEBP keep
+            # their mode and so their transparency.
+            if format.upper() == "JPEG" and img.mode not in ("RGB", "L"):
                 img = img.convert("RGB")
 
             output = BytesIO()
             img.save(output, format=format, optimize=True, quality=85)
-            return output.getvalue()
+            optimized = output.getvalue()
+            return optimized if len(optimized) < len(content) else content
         except Exception as e:
             print(f"Error optimizing image: {e}")
             return content
@@ -2770,8 +2774,9 @@ class WaybackDownloader:
                         "image/gif": "GIF",
                         "image/webp": "WEBP",
                     }
-                    img_format = format_map.get(content_type, "JPEG")
-                    optimized = self._optimize_image(content, img_format)
+                    img_format = format_map.get(content_type)
+                    # Anything else (.ico, .svg, .bmp) is written as it came.
+                    optimized = self._optimize_image(content, img_format) if img_format else content
 
                     with open(local_path, "wb") as f:
                         f.write(optimized)
