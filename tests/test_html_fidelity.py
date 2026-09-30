@@ -359,3 +359,30 @@ class TestWwwConversionOnlyForTheSite:
         assert [a["href"] for a in soup.find_all("a")] == [
             "https://www.site.com/about", "https://www.site.com/about2",
         ]
+
+
+class TestUrlsWithParentheses:
+    """Wikipedia-style names like File_(2).png keep their parentheses."""
+
+    def test_html_references_keep_parentheses(self):
+        dl = _make_dl()
+        soup, links = _process(dl, (
+            f'<html><body><img src="{W}im_/https://site.com/wiki/File_(2).png">'
+            f'<a href="{W}/https://site.com/wiki/Foo_(bar)">f</a></body></html>'
+        ))
+        assert soup.img["src"] == "wiki/File_%282%29.png"
+        assert soup.a["href"] == "wiki/Foo_%28bar%29.html"
+        assert "https://site.com/wiki/File_(2).png" in links
+        assert "https://site.com/wiki/Foo_(bar)" in links
+
+    def test_closing_paren_of_a_wrapper_is_still_dropped(self):
+        dl = _make_dl()
+        assert dl._extract_original_url_from_path(f"url({W}im_/https://site.com/a.png)") == "https://site.com/a.png"
+        assert dl._extract_original_url_from_path(f"url({W}im_/https://site.com/a_(1).png)") == "https://site.com/a_(1).png"
+
+    def test_css_references_keep_parentheses(self):
+        dl = _make_dl()
+        dl._current_page_url = "https://site.com/css/style.css"
+        css = f"a{{background:url({W}im_/https://site.com/img/photo_(1).jpg)}}"
+        assert dl._extract_css_urls(css, "https://site.com/css/style.css") == ["https://site.com/img/photo_(1).jpg"]
+        assert dl._rewrite_css_urls(css, "https://site.com/css/style.css") == "a{background:url(../img/photo_%281%29.jpg)}"

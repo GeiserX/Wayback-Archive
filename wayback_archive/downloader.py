@@ -439,11 +439,15 @@ class WaybackDownloader:
             
             # Pattern: /web/TIMESTAMP/https://original.com/path and replay variants
             # such as im_, cs_, js_, jm_, if_, and fw_.
-            wayback_url_pattern = r"(?:https?://web\.archive\.org)?/web/\d+(?:[a-z]+_)?/(https?://[^\"\s'<>\)]+)"
+            wayback_url_pattern = r"(?:https?://web\.archive\.org)?/web/\d+(?:[a-z]+_)?/(https?://[^\"\s'<>]+)"
             match = re.search(wayback_url_pattern, path)
             if match:
                 extracted = match.group(1)
-                extracted = extracted.rstrip('.,;:)\'"')
+                extracted = extracted.rstrip('.,;:\'"')
+                # A ")" belongs to the URL when it closes a "(" inside it
+                # (File_(2).png); an unmatched one closes a url(...) wrapper.
+                while extracted.endswith(")") and extracted.count(")") > extracted.count("("):
+                    extracted = extracted[:-1].rstrip('.,;:\'"')
                 return extracted
             
             # Pattern for mailto:/tel:/whatsapp: in wayback URLs
@@ -1334,7 +1338,7 @@ class WaybackDownloader:
         urls = []
         
         # Extract @import URLs
-        import_pattern = r'@import\s+(?:url\()?["\']?([^"\'()]+)["\']?\)?'
+        import_pattern = r'@import\s+(?:url\()?["\']?((?:[^"\'()]|\([^"\'()]*\))+)["\']?\)?'
         for match in re.finditer(import_pattern, css, re.IGNORECASE):
             import_url = match.group(1).strip()
             # Extract from wayback URLs
@@ -1346,7 +1350,7 @@ class WaybackDownloader:
                 urls.append(normalized)
         
         # Extract url() references (images, fonts, etc.)
-        url_pattern = r'url\s*\(\s*["\']?([^"\'()]+)["\']?\s*\)'
+        url_pattern = r'url\s*\(\s*["\']?((?:[^"\'()]|\([^"\'()]*\))+)["\']?\s*\)'
         for match in re.finditer(url_pattern, css, re.IGNORECASE):
             css_url = match.group(1).strip()
             # Skip data URIs and special protocols
@@ -1491,10 +1495,10 @@ class WaybackDownloader:
 
         # Pattern to match url() with wayback URLs and absolute paths
         url_patterns = [
-            r'url\s*\(\s*["\']?(https?://web\.archive\.org/web/\d+[a-z]*(?:im_|cs_|js_|jm_)/https?://[^"\'()]+)["\']?\s*\)',  # Absolute wayback (check first)
-            r'url\s*\(\s*["\']?(/web/\d+[a-z]*(?:im_|cs_|js_|jm_)/https?://[^"\'()]+)["\']?\s*\)',  # Relative wayback
-            r'url\s*\(\s*["\']?(https?://[^"\'()]+)["\']?\s*\)',  # Regular URLs
-            r'url\s*\(\s*["\']?(/[^"\'()]+)["\']?\s*\)',  # Absolute paths (for Google Fonts CSS)
+            r'url\s*\(\s*["\']?(https?://web\.archive\.org/web/\d+[a-z]*(?:im_|cs_|js_|jm_)/https?://(?:[^"\'()]|\([^"\'()]*\))+)["\']?\s*\)',  # Absolute wayback (check first)
+            r'url\s*\(\s*["\']?(/web/\d+[a-z]*(?:im_|cs_|js_|jm_)/https?://(?:[^"\'()]|\([^"\'()]*\))+)["\']?\s*\)',  # Relative wayback
+            r'url\s*\(\s*["\']?(https?://(?:[^"\'()]|\([^"\'()]*\))+)["\']?\s*\)',  # Regular URLs
+            r'url\s*\(\s*["\']?(/(?:[^"\'()]|\([^"\'()]*\))+)["\']?\s*\)',  # Absolute paths (for Google Fonts CSS)
         ]
         
         for pattern in url_patterns:
