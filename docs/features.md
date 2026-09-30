@@ -27,9 +27,9 @@
 - **HTML minification** -- Uses `minify-html` (Python 3.14+ compatible)
 - **JS/CSS minification** -- Optional JavaScript and CSS minification via `rjsmin` and `cssmin`
 - **Image compression** -- Optional image optimization with Pillow
-- **Tracker/ad removal** -- Strips analytics, ads, and external iframes
+- **Tracker/ad removal** -- Strips analytics and ads by default, and external iframes when asked
 - **Link cleanup** -- Configurable external link removal with anchor preservation options
-- **www/non-www normalization** -- Normalize domain variations automatically
+- **www/non-www normalization** -- Drops `www.` from the archived site's host by default, or adds it with `MAKE_WWW`
 
 ## Why Wayback-Archive?
 

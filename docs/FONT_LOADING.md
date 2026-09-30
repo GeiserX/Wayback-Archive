@@ -19,12 +19,9 @@ Many websites use external font services (Google Fonts, Adobe Fonts, etc.) that 
 - `<link href="http://fonts.googleapis.com/css?family=Montserrat" rel="stylesheet">`
 - `@import url('https://fonts.googleapis.com/css?family=Montserrat');`
 
-**Issue**: The Wayback-Archive scraper is configured to only download internal resources (same domain). External font services are not downloaded, so fonts fail to load locally.
-
-**Current Behavior**: 
-- External font CSS links are preserved in HTML but point to external URLs
-- When viewing locally, browsers try to load fonts from external services
-- If offline or if external services are blocked, fonts fall back to system defaults
+**Current Behavior**:
+- Google Fonts stylesheets and the font files they name are downloaded and served from the local copy. Each is taken from the Wayback Machine first and fetched live from `fonts.googleapis.com` or `fonts.gstatic.com` when the archive lacks it
+- Other font services (Adobe Fonts and the like) are not downloaded: their links keep pointing at the external URL, and offline the browser falls back to system fonts
 
 ### Corrupted Font Files from Wayback Machine
 
@@ -92,7 +89,8 @@ Modern CSS `@font-face` declarations often include multiple font formats:
 - ✅ Corrupted font detection (HTML error pages)
 - ✅ Automatic removal of corrupted font references from CSS
 - ✅ Removal of `.eot` and `.svg` font formats (often corrupted)
-- ❌ External font service downloading (not implemented)
+- ✅ Google Fonts downloading (CSS and font files)
+- ❌ Other external font services (not implemented)
 - ❌ Font format conversion (not implemented)
 - ❌ Font substitution/fallback (not implemented)
 
