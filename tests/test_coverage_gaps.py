@@ -159,7 +159,7 @@ class TestDownloadFileFallbacks:
                 raise requests.exceptions.Timeout("live timeout")
 
         self.dl.session.get = mock_get
-        result = self.dl.download_file("http://example.com/image.jpg")
+        result = self.dl.download_file("https://static1.squarespace.com/image.jpg")
         assert result is None
 
     def test_404_live_fallback_http_error(self):
@@ -181,7 +181,7 @@ class TestDownloadFileFallbacks:
                 return resp
 
         self.dl.session.get = mock_get
-        result = self.dl.download_file("http://example.com/image.jpg")
+        result = self.dl.download_file("https://static1.squarespace.com/image.jpg")
         assert result is None
 
     def test_timeout_live_fallback_corrupted_font(self):
@@ -201,7 +201,7 @@ class TestDownloadFileFallbacks:
             return resp
 
         self.dl.session.get = mock_get
-        result = self.dl.download_file("http://example.com/font.woff")
+        result = self.dl.download_file("https://fonts.gstatic.com/s/f/v1/font.woff")
         assert result is None
 
     def test_timeout_live_fallback_exception(self):
@@ -217,7 +217,7 @@ class TestDownloadFileFallbacks:
             raise Exception("network error")
 
         self.dl.session.get = mock_get
-        result = self.dl.download_file("http://example.com/image.jpg")
+        result = self.dl.download_file("https://static1.squarespace.com/image.jpg")
         assert result is None
 
     def test_non_404_http_error(self):

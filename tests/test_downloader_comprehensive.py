@@ -1093,7 +1093,7 @@ class TestDownloadFile:
         assert result == b"found content"
 
     def test_timeout_tries_live_url_for_assets(self):
-        """On timeout, should try original live URL for non-HTML assets."""
+        """On timeout, should try a well-known CDN live for non-HTML assets."""
         import requests
 
         attempt = 0
@@ -1109,7 +1109,7 @@ class TestDownloadFile:
             return resp
 
         self.dl.session.get = mock_get
-        result = self.dl.download_file("http://example.com/image.jpg")
+        result = self.dl.download_file("https://static1.squarespace.com/image.jpg")
         assert result == b"live content"
 
     def test_timeout_no_live_fallback_for_html(self):
@@ -1146,7 +1146,7 @@ class TestDownloadFile:
         assert result is not None
 
     def test_404_live_fallback_for_assets(self):
-        """On 404 from all wayback timestamps, should try original URL for assets."""
+        """On 404 from all wayback timestamps, should try a well-known CDN live for assets."""
         import requests
 
         def mock_get(url, **kwargs):
@@ -1163,7 +1163,7 @@ class TestDownloadFile:
             return resp
 
         self.dl.session.get = mock_get
-        result = self.dl.download_file("http://example.com/image.png")
+        result = self.dl.download_file("https://static1.squarespace.com/image.png")
         assert result == b"from live"
 
     def test_live_fallback_corrupted_font(self):
@@ -1184,8 +1184,9 @@ class TestDownloadFile:
             return resp
 
         self.dl.session.get = mock_get
-        result = self.dl.download_file("http://example.com/font.woff")
+        result = self.dl.download_file("https://fonts.gstatic.com/s/f/v1/font.woff")
         assert result is None
+        assert self.dl.corrupted_fonts
 
 
 # ===================================================================

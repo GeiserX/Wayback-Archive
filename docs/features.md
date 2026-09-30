@@ -12,7 +12,7 @@
 
 - **Google Fonts support** -- Downloads Google Fonts CSS and font files locally, fixing CORS issues
 - **Font corruption detection** -- Identifies and removes corrupted font files (HTML error pages served as fonts)
-- **CDN fallback** -- Automatic fallback to CDN for critical libraries (e.g., jQuery) when Wayback Machine fails
+- **CDN fallback** -- When the Wayback Machine lacks a file hosted on Google Fonts, `code.jquery.com` or the Squarespace CDN, fetches it from that CDN; a missing `jquery.min.js` is replaced with jQuery 3.7.1 from `code.jquery.com`. Nothing else is fetched live (see [How it works](how-it-works.md#where-requests-go))
 - **Data attribute processing** -- Processes `data-*` attributes containing URLs (videos, images, etc.)
 
 ## Preservation
