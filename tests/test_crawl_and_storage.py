@@ -224,6 +224,68 @@ class TestOneFetchPerStoredFile:
         assert contents == {"/* lato */", "/* roboto */"}
 
 
+class TestServerSidePages:
+    """url-and-rewrite-8 and -3: .php and friends are pages."""
+
+    @pytest.mark.parametrize("ext", [".php", ".asp", ".aspx", ".jsp", ".cfm", ".cgi", ".pl", ".shtml", ".phtml"])
+    def test_page_extensions_are_pages(self, ext):
+        dl = _make_downloader()
+        url = f"https://example.com/dir/page{ext}"
+        assert dl._is_html_url(url) is True
+        assert dl._get_local_path(url).name == f"page{ext}.html"
+
+    def test_jsp_is_not_requested_as_a_script(self):
+        dl = _make_downloader()
+        assert "js_/" not in dl._convert_to_wayback_url_with_timestamp("https://example.com/news.jsp")
+        assert "js_/" in dl._convert_to_wayback_url_with_timestamp("https://example.com/app.js")
+
+    def test_path_info_urls_do_not_collide(self, tmp_path):
+        page = (
+            b'<html><body><a href="https://example.com/index.php">a</a>'
+            b'<a href="https://example.com/index.php/about">b</a>'
+            b'<a href="https://example.com/later.pl">c</a></body></html>'
+        )
+        dl, files, _, output_dir = _run(
+            tmp_path,
+            {
+                "https://example.com/": page,
+                "https://example.com/index.php": b"<html><body><a href='/'>home</a></body></html>",
+                "https://example.com/index.php/about": b"<html><body>about</body></html>",
+                "https://example.com/later.pl": b"<p>later <a href='/index.php'>i</a></p>",
+            },
+        )
+        assert {"index.html", "index.php.html", "index.php/about.html", "later.pl.html"} <= files
+        index = (output_dir / "index.html").read_text()
+        for href in _hrefs(index):
+            assert (output_dir / unquote(href)).is_file(), href
+        # The .pl page was processed as HTML, so its link was rewritten.
+        assert "index.php.html" in (output_dir / "later.pl.html").read_text()
+
+
+class TestOneBadPathFailsOneFile:
+    """security-5: an OSError on one file must not end the run."""
+
+    @pytest.mark.parametrize(
+        "first, second",
+        [
+            ("/" + "a" * 300 + "/x.png", None),
+            ("/a.png", "/a.png/b.png"),
+        ],
+    )
+    def test_run_continues_after_os_error(self, tmp_path, first, second):
+        site = "https://example.com"
+        imgs = f'<img src="{site}{first}">' + (f'<img src="{site}{second}">' if second else "")
+        page = f'<html><body>{imgs}<img src="{site}/logo.png"></body></html>'.encode()
+        png = b"\x89PNG\r\n\x1a\nxx"
+        pages = {"https://example.com/": page, "https://example.com/logo.png": png}
+        pages["https://example.com" + first] = png
+        if second:
+            pages["https://example.com" + second] = png
+        dl, files, out, _ = _run(tmp_path, pages)
+        assert "logo.png" in files
+        assert "Files failed: 1" in out
+
+
 class TestTextIsDecodedNotDropped:
     """E2E-3, html-processing-2, download-loop-004."""
 

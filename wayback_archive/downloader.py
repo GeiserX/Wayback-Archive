@@ -106,6 +106,14 @@ class WaybackDownloader:
     }
     DEFAULT_EXTENSION = ".html"
 
+    # Server-side page extensions. The archived file is the HTML the script
+    # produced, so it is fetched as a page and stored with .html appended
+    # (index.php -> index.php.html): a static server then sends it as HTML,
+    # and /index.php can sit next to an /index.php/ directory.
+    PAGE_EXTENSIONS = frozenset(
+        {".php", ".asp", ".aspx", ".jsp", ".cfm", ".cgi", ".pl", ".shtml", ".phtml"}
+    )
+
     # References that name no file to fetch.
     NON_FETCHABLE_PREFIXES = (
         "data:", "javascript:", "vbscript:", "mailto:", "tel:", "sms:",
@@ -232,6 +240,8 @@ class WaybackDownloader:
         if path_lower.endswith('.html') or path_lower.endswith('.htm'):
             return True
         ext = os.path.splitext(path_lower)[1]
+        if ext in WaybackDownloader.PAGE_EXTENSIONS:
+            return True
         if ext:
             return False
         non_html = {'.css', '.js', '.jpg', '.jpeg', '.png', '.gif', '.svg',
@@ -313,20 +323,22 @@ class WaybackDownloader:
         # A URL with no extension gives the guesses below nothing to work
         # with, so Wayback serves its wrapped replay page instead of the raw
         # file. The element that referenced it knows better.
-        if "." not in os.path.basename(path):
+        # Compare the real extension: a substring test gave news.jsp js_.
+        ext = os.path.splitext(os.path.basename(path))[1]
+        if not ext or ext in self.PAGE_EXTENSIONS:
             prefix_for_kind = {"stylesheet": "cs_", "script": "js_", "image": "im_"}
             asset_prefix = prefix_for_kind.get(self._referenced_kind(url) or "", "")
             if asset_prefix:
                 return f"https://web.archive.org/web/{timestamp}{asset_prefix}/{url}"
 
-        if any(ext in path for ext in [".jpg", ".jpeg", ".png", ".gif", ".svg", ".webp", ".ico", ".bmp"]):
+        if ext in (".jpg", ".jpeg", ".png", ".gif", ".svg", ".webp", ".ico", ".bmp"):
             asset_prefix = "im_"
-        elif any(ext in path for ext in [".woff", ".woff2", ".ttf", ".eot", ".otf"]):
+        elif ext in (".woff", ".woff2", ".ttf", ".eot", ".otf"):
             # Font files also use im_ prefix in Wayback Machine
             asset_prefix = "im_"
-        elif any(ext in path for ext in [".css"]):
+        elif ext == ".css":
             asset_prefix = "cs_"
-        elif any(ext in path for ext in [".js"]):
+        elif ext in (".js", ".mjs"):
             asset_prefix = "js_"
         
         if asset_prefix:
@@ -529,7 +541,8 @@ class WaybackDownloader:
         Returns:
             A path inside output_dir.
         """
-        if "." in os.path.basename(path):
+        name = os.path.basename(path)
+        if "." in name and os.path.splitext(name)[1].lower() not in self.PAGE_EXTENSIONS:
             return self._resolve_output_path(path)
 
         if kind and path not in self._path_kinds:
@@ -2248,6 +2261,10 @@ class WaybackDownloader:
             try:
                 parsed = urlparse(url)
                 content_type, _ = mimetypes.guess_type(parsed.path)
+                # A server-side page is whatever its script sent (mimetypes
+                # calls .pl text/plain), so let the content decide.
+                if os.path.splitext(parsed.path.lower())[1] in self.PAGE_EXTENSIONS:
+                    content_type = None
                 
                 # Better content type detection from URL path
                 # Check for Google Fonts CSS files first (they don't have .css extension)
@@ -2298,12 +2315,12 @@ class WaybackDownloader:
             
             try:
                 local_path.parent.mkdir(parents=True, exist_ok=True)
-            except UnsafeOutputPathError as e:
-                # Archived content asked us to write outside OUTPUT_DIR. Skip
-                # this file and keep archiving the rest of the site.
+            except OSError as e:
+                # A name too long for the filesystem, or one already taken by
+                # a file, costs this file only, not the rest of the run.
                 files_downloaded -= 1
                 files_failed += 1
-                print(f"         ⛔ Refused unsafe path for {url}: {e}", flush=True)
+                print(f"         ⛔ Cannot store {url}: {e}", flush=True)
                 continue
             
             # A URL with no extension tells us nothing about its type, but the
@@ -2349,6 +2366,8 @@ class WaybackDownloader:
                                 f.write(content)
                             self.config.downloaded_files[url] = str(local_path)
                         except Exception as save_error:
+                            files_downloaded -= 1
+                            files_failed += 1
                             print(f"Error saving file {local_path}: {save_error}")
                         continue
 
@@ -2358,6 +2377,8 @@ class WaybackDownloader:
                             f.write(processed_html)
                         self.config.downloaded_files[url] = str(local_path)
                     except Exception as e:
+                        files_downloaded -= 1
+                        files_failed += 1
                         print(f"Error saving HTML to {local_path}: {e}")
                         continue
 
@@ -2429,6 +2450,8 @@ class WaybackDownloader:
                             f.write(css)
                         self.config.downloaded_files[url] = str(local_path)
                     except Exception as e:
+                        files_downloaded -= 1
+                        files_failed += 1
                         print(f"Error saving CSS to {local_path}: {e}")
                         continue
 
@@ -2481,6 +2504,9 @@ class WaybackDownloader:
 
                     self.config.downloaded_files[url] = str(local_path)
             except Exception as e:
+                # One file that cannot be processed or written fails alone.
+                files_downloaded -= 1
+                files_failed += 1
                 print(f"Error processing {url}: {e}")
                 continue
 
