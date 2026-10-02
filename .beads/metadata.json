@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "Wayback_Archive",
+  "project_id": "33400f00-ff7c-4646-9fc6-ffdbd7a7d44a"
+}
