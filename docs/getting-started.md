@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Python 3.10 or newer (on 3.9, pip stops with `ResolutionImpossible`)
+- Python 3.10 or newer (pip on 3.9 finds no release it can install; see [Troubleshooting](troubleshooting.md#pip-cannot-install-it-python-39))
 - pipx or pip
 
 ## From PyPI
