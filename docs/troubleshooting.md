@@ -16,9 +16,9 @@ source .venv/bin/activate
 pip install wayback-archive
 ```
 
-## pip stops with ResolutionImpossible (Python 3.9)
+## pip cannot install it (Python 3.9)
 
-Wayback-Archive needs Python 3.10 or newer. On Python 3.9, pip skips 1.5.0, tries 1.4.2 to 1.4.6, finds that the `requests` version they need does not install on 3.9, and stops with `ERROR: ResolutionImpossible`. The `python3` that ships with macOS is 3.9. Install Python 3.10 or newer (for example `brew install python`) and install again with pipx or in a new virtual environment.
+Wayback-Archive needs Python 3.10 or newer. On Python 3.9, pip skips 1.5.0 and finds no older release it can use: it stops with `ERROR: ResolutionImpossible` while it can still try 1.4.2 to 1.4.6 (their `requests` does not install on 3.9), and with `ERROR: No matching distribution found for wayback-archive` once those are yanked. The `python3` that ships with macOS is 3.9. Install Python 3.10 or newer (for example `brew install python`) and install again with pipx or in a new virtual environment.
 
 ## Port already in use
 
