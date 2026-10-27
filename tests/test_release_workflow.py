@@ -6,7 +6,11 @@ run third-party code. Parsed as text because PyYAML is not a dependency.
 """
 
 import re
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 RELEASE = Path(__file__).resolve().parent.parent / ".github" / "workflows" / "release.yml"
 TEXT = RELEASE.read_text()
@@ -103,3 +107,23 @@ def test_docker_image_is_never_tagged_latest():
     assert ":latest" not in job
     secrets_check = _steps(job)[0]
     assert "DOCKERHUB_TOKEN" in secrets_check and "exit 1" in secrets_check
+
+
+def _image_tags(version, tmp_path):
+    """Run the docker-publish tag step's script for one version."""
+    step = next(s for s in _steps(_job("docker-publish")) if "id: tags" in s)
+    script = "\n".join(line[8:] for line in step.split("run: |\n", 1)[1].splitlines())
+    out = tmp_path / f"output-{version}"
+    env = {"VERSION": version, "GITHUB_OUTPUT": str(out), "PATH": "/usr/bin:/bin"}
+    subprocess.run(["bash", "-c", script], check=True, env=env)
+    return out.read_text().strip().split("=", 1)[1].split(",")
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+def test_minor_tag_moves_only_for_a_final_release(tmp_path):
+    # A prerelease such as 1.6.0rc1 must not move :1.6 off the last final release.
+    assert _image_tags("1.6.0", tmp_path) == [
+        "geiserx/wayback-archive:1.6.0",
+        "geiserx/wayback-archive:1.6",
+    ]
+    assert _image_tags("1.6.0rc1", tmp_path) == ["geiserx/wayback-archive:1.6.0rc1"]

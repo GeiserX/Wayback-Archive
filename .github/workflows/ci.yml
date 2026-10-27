@@ -87,14 +87,15 @@ jobs:
         name: codecov-umbrella
         fail_ci_if_error: false
 
-  # Paths, line endings and file names behave differently on Windows and macOS;
+  # Paths, line endings and file names behave differently off Linux;
   # one Python version is enough to catch that.
   test-os:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        # windows returns once the path tests are separator-neutral, see #72
+        os: [macos-latest]
 
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

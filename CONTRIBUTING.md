@@ -22,9 +22,11 @@ CI runs exactly these, and a pull request merges only when they pass:
 
 ```bash
 ruff check wayback_archive tests
-ruff format wayback_archive tests
+ruff format --check wayback_archive tests
 pytest tests/ -q
 ```
+
+`ruff format wayback_archive tests` (without `--check`) fixes the formatting in place.
 
 The tests never touch the network: a guard in `tests/conftest.py` refuses any
 connection that is not to localhost, so a test that needs a response mocks it.

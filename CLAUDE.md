@@ -25,9 +25,11 @@ Lint, format and test exactly as CI does:
 
 ```bash
 ruff check wayback_archive tests
-ruff format wayback_archive tests
+ruff format --check wayback_archive tests
 pytest tests/ -q
 ```
+
+`ruff format wayback_archive tests` (without `--check`) fixes the formatting in place.
 
 `wayback_archive/__init__.py` holds `__version__` and must import nothing: the release workflow reads it with no dependencies installed.
 

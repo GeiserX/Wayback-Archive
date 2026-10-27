@@ -11,7 +11,7 @@ All notable changes to this project are listed here. The format follows
 ### Added
 
 - Docker image on Docker Hub: `geiserx/wayback-archive:<version>` and `:<major>.<minor>`, for amd64 and arm64. It runs as a non-root user and writes to `/output`. There is no `:latest` tag.
-- Python 3.13 and 3.14 are supported and tested; the test suite also runs on Windows and macOS.
+- Python 3.13 and 3.14 are supported and tested; the test suite also runs on macOS.
 - Each release attaches its wheel and sdist to the GitHub release.
 
 ### Changed

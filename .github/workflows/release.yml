@@ -147,8 +147,13 @@ jobs:
       env:
         VERSION: ${{ needs.build.outputs.version }}
       run: |
-        minor=$(echo "$VERSION" | cut -d. -f1,2)
-        echo "tags=geiserx/wayback-archive:$VERSION,geiserx/wayback-archive:$minor" >> "$GITHUB_OUTPUT"
+        tags="geiserx/wayback-archive:$VERSION"
+        # A prerelease (1.6.0rc1) gets its own tag only; :<major>.<minor> moves
+        # only for a final X.Y.Z release.
+        if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          tags="$tags,geiserx/wayback-archive:${VERSION%.*}"
+        fi
+        echo "tags=$tags" >> "$GITHUB_OUTPUT"
 
     - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
 

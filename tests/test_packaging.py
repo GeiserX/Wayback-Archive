@@ -69,3 +69,15 @@ def test_ci_installs_the_built_wheel_outside_the_checkout():
     assert "python -m build" in CI
     assert "pip install dist/*.whl" in CI
     assert "'site-packages' in" in CI
+
+
+def test_docs_list_the_commands_ci_runs():
+    # CONTRIBUTING, CLAUDE and AGENTS say "exactly as CI does"; a ruff line in
+    # that block which CI does not run (a formatter that rewrites) misleads.
+    for name in ("CONTRIBUTING.md", "CLAUDE.md", "AGENTS.md"):
+        blocks = [b.split("```", 1)[0] for b in (ROOT / name).read_text().split("```bash\n")[1:]]
+        block = next(b for b in blocks if "ruff check" in b)
+        ruff_lines = [line for line in block.splitlines() if line.startswith("ruff ")]
+        assert ruff_lines, name
+        for line in ruff_lines:
+            assert line in CI, (name, line)
