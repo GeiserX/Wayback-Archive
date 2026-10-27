@@ -1,8 +1,8 @@
 """The release workflow publishes only from a published release, only what it checked.
 
-The PyPI token must only be visible to the step that uploads: a job-level env
-exports it to every step, including pip installs and the build backend, which
-run third-party code. Parsed as text because PyYAML is not a dependency.
+PyPI uploads go through Trusted Publishing: the publish job alone may mint an
+OIDC token, and no PyPI token exists as a secret. Parsed as text because PyYAML
+is not a dependency.
 """
 
 import re
@@ -12,7 +12,8 @@ from pathlib import Path
 
 import pytest
 
-RELEASE = Path(__file__).resolve().parent.parent / ".github" / "workflows" / "release.yml"
+WORKFLOWS = Path(__file__).resolve().parent.parent / ".github" / "workflows"
+RELEASE = WORKFLOWS / "release.yml"
 TEXT = RELEASE.read_text()
 
 
@@ -76,11 +77,29 @@ def test_publish_uses_the_built_artifact_in_the_pypi_environment():
     assert "python -m build" not in job
 
 
-def test_token_is_only_in_the_upload_step():
-    assert TEXT.count("secrets.PYPI_API_TOKEN") == 1
-    holders = [step for step in _steps(_job("publish")) if "secrets.PYPI_API_TOKEN" in step]
-    assert len(holders) == 1
-    assert "twine upload" in holders[0]
+def test_only_the_publish_job_can_mint_an_oidc_token():
+    # id-token: write lets a job prove it is this workflow to PyPI; any other
+    # job holding it could publish too.
+    holders = [name for name in ("build", "publish", "docker-publish") if "id-token: write" in _job(name)]
+    assert holders == ["publish"]
+    assert "id-token: write" in _header(_job("publish"))
+    assert TEXT.count("id-token:") == 1
+
+
+def test_no_workflow_mentions_a_pypi_token():
+    for workflow in WORKFLOWS.glob("*.yml"):
+        assert "PYPI_API_TOKEN" not in workflow.read_text(), workflow.name
+
+
+def test_publish_step_is_the_pinned_pypa_action():
+    job = _job("publish")
+    assert "environment: pypi" in _header(job)
+    uploads = [step for step in _steps(job) if "pypa/gh-action-pypi-publish@" in step]
+    assert len(uploads) == 1
+    assert re.search(r"uses: pypa/gh-action-pypi-publish@[0-9a-f]{40} # v\d+\.\d+\.\d+$", uploads[0], re.MULTILINE)
+    # Attestations are on by default; turning them off would drop provenance.
+    assert "attestations: false" not in job
+    assert "twine" not in job
 
 
 def test_jobs_have_no_env_block():
@@ -88,17 +107,11 @@ def test_jobs_have_no_env_block():
         assert not re.search(r"^    env:", _header(_job(name)), re.MULTILINE)
 
 
-def test_missing_token_fails_the_release():
-    upload = next(step for step in _steps(_job("publish")) if "twine upload" in step)
-    assert "exit 1" in upload
-    assert "exit 0" not in upload
-    assert "::warning::" not in upload
-
-
 def test_distributions_are_attached_to_the_release():
     job = _job("publish")
     assert "contents: write" in _header(job)
-    assert 'gh release upload "$GITHUB_REF_NAME" dist/*' in job
+    # Not dist/*: the publish step leaves .publish.attestation files there.
+    assert 'gh release upload "$GITHUB_REF_NAME" dist/*.whl dist/*.tar.gz ' in job
 
 
 def test_docker_image_is_never_tagged_latest():

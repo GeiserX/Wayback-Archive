@@ -72,11 +72,9 @@ jobs:
   # Publishes exactly the files the build job checked. Only a published release
   # gets here; a dispatched run stops after the build.
   #
-  # Next step: Trusted Publishing. Once PyPI trusts this workflow and the `pypi`
-  # environment, add `id-token: write` below, delete the two Python steps and
-  # replace the twine step with
-  #   - uses: pypa/gh-action-pypi-publish@<sha> # vX.Y.Z
-  # which reads dist/ and needs no token.
+  # Trusted Publishing: PyPI trusts this workflow in the `pypi` environment and
+  # exchanges the job's OIDC token for a short-lived upload token, so no PyPI
+  # secret exists anywhere. The action also uploads attestations for each file.
   publish:
     if: github.event_name == 'release'
     needs: build
@@ -85,6 +83,8 @@ jobs:
     permissions:
       # Attaches the distributions to the GitHub release.
       contents: write
+      # Proves to PyPI that this job is the trusted publisher.
+      id-token: write
 
     steps:
     - name: Download built distributions
@@ -93,32 +93,15 @@ jobs:
         name: wayback-archive-dist
         path: dist
 
-    - name: Set up Python
-      uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-      with:
-        python-version: "3.13"
-
-    - name: Install twine
-      run: pip install twine==7.0.0
-
-    # The token lives in this step only: a job-level env would hand it to
-    # every step above, including pip installs. A missing token fails the
-    # release instead of reporting green with nothing on PyPI.
     - name: Publish to PyPI
-      env:
-        TWINE_USERNAME: __token__
-        TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
-      run: |
-        if [ -z "$TWINE_PASSWORD" ]; then
-          echo "::error::PYPI_API_TOKEN is not set; nothing was published to PyPI."
-          exit 1
-        fi
-        twine upload dist/*
+      uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
 
+    # Named by extension: the publish step leaves a .publish.attestation file
+    # beside each distribution in dist/.
     - name: Attach the distributions to the GitHub release
       env:
         GH_TOKEN: ${{ github.token }}
-      run: gh release upload "$GITHUB_REF_NAME" dist/* --clobber -R "$GITHUB_REPOSITORY"
+      run: gh release upload "$GITHUB_REF_NAME" dist/*.whl dist/*.tar.gz --clobber -R "$GITHUB_REPOSITORY"
 
   # Publishes drumsergio/wayback-archive:<version> and :<major>.<minor>, never
   # :latest, for amd64 and arm64.
