@@ -35,11 +35,15 @@ def _host_matches(url: str, hosts) -> bool:
     # urlparse silently drops these, requests does not.
     if any(c in url for c in "\t\r\n"):
         return False
-    parsed = urlparse(url)
+    try:
+        parsed = urlparse(url)
+        hostname = parsed.hostname
+    except ValueError:  # a stray or misplaced bracket
+        return False
     netloc = parsed.netloc
     if not netloc.isascii() or any(c in "\\@%" or c.isspace() or not c.isprintable() for c in netloc):
         return False
-    host = (parsed.hostname or "").lower().removesuffix(".")
+    host = (hostname or "").lower().removesuffix(".")
     return bool(host) and any(host == h or host.endswith("." + h) for h in hosts)
 
 
@@ -966,7 +970,11 @@ class WaybackDownloader:
         if ext not in (".woff", ".woff2", ".ttf", ".eot", ".otf", ".svg"):
             return False
         head = content[:512].lstrip(b"\xef\xbb\xbf \t\r\n").lower()
-        return head.startswith((b"<!doctype html", b"<html")) or re.search(rb"<(head|body)\b", head) is not None
+        if head.startswith((b"<!doctype html", b"<html")):
+            return True
+        # A <body> inside an SVG's <foreignObject> comes after its <svg>.
+        match = re.search(rb"<(head|body)\b", head)
+        return match is not None and b"<svg" not in head[: match.start()]
 
     def download_file(self, url: str) -> bytes | None:
         """Download a file from the given URL with timeframe fallback.
@@ -1134,7 +1142,10 @@ class WaybackDownloader:
 
     def _wayback_get(self, url: str, **kwargs):
         """GET from the Wayback Machine, paced, with the body read under the
-        size cap. Raises _RejectedResponse when a redirect left Wayback."""
+        size cap. Raises _RejectedResponse when a redirect left Wayback.
+
+        Only the final host and body are checked: requests reads each 3xx
+        hop's own body in full before this sees the final URL."""
         self._pace()
         response = self.session.get(url, stream=True, **kwargs)
         final = getattr(response, "url", None)

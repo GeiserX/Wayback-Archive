@@ -69,6 +69,8 @@ class TestHostMatches:
             "https://notfonts.gstatic.com/x",
             "https://fonts.gstatic.com.evil.com/x",
             "/relative/path",
+            "https://fonts.gstatic.com]/x",
+            "https://[fonts.gstatic.com]/x",
         ],
     )
     def test_spoofed_hosts_never_match(self, url):
@@ -155,6 +157,7 @@ class TestPacing:
         assert len(dl.session.get.calls) > 1
         assert len(sleeps) == len(dl.session.get.calls)
         assert all(1.6 <= s <= 2.4 for s in sleeps)
+        assert len(set(sleeps)) > 1
 
 
 class TestTimestampFallback:
@@ -340,6 +343,11 @@ class TestCorruptedFont:
             ),
             ("http://example.com/logo.svg", b'<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "x"><svg></svg>'),
             ("http://example.com/logo.svg?v=2", b"<!DOCTYPE svg><svg></svg>"),
+            (
+                "http://example.com/card.svg",
+                b'<svg xmlns="http://www.w3.org/2000/svg"><foreignObject>'
+                b'<body xmlns="http://www.w3.org/1999/xhtml"><p>x</p></body></foreignObject></svg>',
+            ),
             ("http://example.com/f.woff2", b"wOF2\x00\x01"),
             ("http://example.com/page.html", b"<!DOCTYPE html><html>"),
         ],
