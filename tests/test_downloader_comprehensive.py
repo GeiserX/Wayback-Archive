@@ -631,8 +631,8 @@ class TestGetFileTypeFromUrl:
     def test_google_fonts_css(self):
         assert self.dl._get_file_type_from_url("https://fonts.googleapis.com/css?family=Roboto") == "CSS"
 
-    def test_svg_font(self):
-        assert self.dl._get_file_type_from_url("http://example.com/font.svg") == "Font"
+    def test_svg_is_an_image(self):
+        assert self.dl._get_file_type_from_url("http://example.com/font.svg") == "Image"
 
 
 # ===================================================================
