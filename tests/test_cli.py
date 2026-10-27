@@ -187,6 +187,35 @@ class TestFlags:
         assert err.startswith("Error: 'boom'\n")
         assert "Traceback" in err
 
+    def test_constructor_failure_exits_1_like_a_failed_run(self, capsys):
+        """An error while building the downloader gets the run's exit code and message."""
+
+        def fail(config):
+            raise PermissionError("output directory is not writable")
+
+        with patch.object(cli, "WaybackDownloader", fail), pytest.raises(SystemExit) as exc_info:
+            main([URL])
+        err = capsys.readouterr().err
+        assert exc_info.value.code == 1
+        assert err.startswith("Error: output directory is not writable\n")
+
+    def test_constructor_interrupted_exits_130(self, capsys):
+        def interrupt(config):
+            raise KeyboardInterrupt
+
+        with patch.object(cli, "WaybackDownloader", interrupt), pytest.raises(SystemExit) as exc_info:
+            main([URL])
+        assert exc_info.value.code == 130
+        assert "Interrupted" in capsys.readouterr().err
+
+    def test_not_a_wayback_url_exits_1_without_traceback(self, capsys):
+        with pytest.raises(SystemExit) as exc_info:
+            main(["https://example.com/"])
+        err = capsys.readouterr().err
+        assert exc_info.value.code == 1
+        assert err.startswith("Error: WAYBACK_URL must look like")
+        assert "Traceback" not in err
+
 
 class TestPythonAPI:
     def test_download_builds_config_from_arguments(self, tmp_path):
