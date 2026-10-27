@@ -134,7 +134,7 @@ class TestLongNames:
         stored = [f for f in files if f.endswith("/x.png")]
         assert len(stored) == 1
         assert (output_dir / stored[0]).read_bytes() == png
-        assert f"src={stored[0]}>" in (output_dir / "index.html").read_text()
+        assert f'src="{stored[0]}"' in (output_dir / "index.html").read_text()
 
 
 class TestPortableNames:

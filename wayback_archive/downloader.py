@@ -1804,7 +1804,7 @@ class WaybackDownloader:
                 # The extractor stops at whitespace, which only a quoted
                 # url() can hold: strip the prefix and keep the quotes.
                 quote = re.match(r"url\s*\(\s*([\"']?)", full_match, re.IGNORECASE).group(1)
-                unwrapped = self._WAYBACK_PREFIX.sub("", value, count=1)
+                unwrapped = self._WAYBACK_WRAP.sub("", value, count=1)
                 return f"url({quote}{unwrapped}{quote})" if quote and unwrapped != value else full_match
             return f"url({self._unwrap_wayback(value)})"
 
@@ -2065,7 +2065,7 @@ class WaybackDownloader:
     )
     _HAS_SCHEME = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*:")
     # The Wayback part in front of an original http(s) address.
-    _WAYBACK_PREFIX = re.compile(r"^(?:(?:https?:)?//web\.archive\.org)?/web/\d+(?:[a-z]+_)?/(?=https?://)")
+    _WAYBACK_WRAP = re.compile(r"^(?:(?:https?:)?//web\.archive\.org)?/web/\d+(?:[a-z]+_)?/(?=https?://)")
     # A Wayback-form http(s) address inside free text, such as a comment.
     _WAYBACK_URL_IN_TEXT = re.compile(r"(?:(?:https?:)?//web\.archive\.org)?/web/\d+(?:[a-z]+_)?/https?://[^\"'\s<>]+")
 
