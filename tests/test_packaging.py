@@ -16,8 +16,11 @@ def _version(text):
 
 
 def _ci_matrix():
-    match = re.search(r"python-version:\s*\[([^\]]*)\]", CI)
-    return sorted(_version(v) for v in re.findall(r'"([\d.]+)"', match.group(1)))
+    # The `test` job's matrix is the only list-form python-version; the other
+    # jobs pin one version. A second list would be ignored here, so refuse it.
+    matches = re.findall(r"python-version:\s*\[([^\]]*)\]", CI)
+    assert len(matches) == 1, matches
+    return sorted(_version(v) for v in re.findall(r'"([\d.]+)"', matches[0]))
 
 
 def test_requires_python_is_the_lowest_ci_version():
@@ -37,6 +40,17 @@ def test_pytest_settings_are_loaded(pytestconfig):
     # a file under config/ is silently ignored.
     assert pytestconfig.inipath == ROOT / "pyproject.toml"
     assert pytestconfig.getini("testpaths") == ["tests"]
+
+
+def test_every_action_is_pinned_to_a_commit():
+    # A tag can be moved to other code after review; a commit SHA cannot.
+    for workflow in (ROOT / ".github" / "workflows").glob("*.yml"):
+        for ref in re.findall(r"^\s*(?:- )?uses:\s*(\S+)", workflow.read_text(), re.MULTILINE):
+            assert re.search(r"@[0-9a-f]{40}$", ref), f"{workflow.name}: {ref}"
+
+
+def test_coverage_has_a_floor():
+    assert re.search(r"--cov-fail-under=\d+", CI)
 
 
 def test_ci_gates_can_fail():

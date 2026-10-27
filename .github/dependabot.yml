@@ -19,6 +19,9 @@ updates:
           - '*'
   - package-ecosystem: pip
     directory: /config
+    # Bump a ">=" floor only when the new release falls outside it; a floor
+    # is the oldest version the code supports, not the newest release.
+    versioning-strategy: increase-if-necessary
     schedule:
       interval: weekly
       day: monday
