@@ -50,12 +50,15 @@ jobs:
         pip install -r config/requirements-dev.txt
 
     # ruff replaces flake8 and black: the rules live in pyproject.toml, and a
-    # file that is not formatted fails the build. mypy comes back when the
-    # code passes it.
+    # file that is not formatted fails the build.
     - name: Lint and check formatting with ruff
       run: |
         ruff check wayback_archive tests
         ruff format --check wayback_archive tests
+
+    # The mypy settings live in pyproject.toml.
+    - name: Type check with mypy
+      run: mypy wayback_archive
 
     # Coverage sits above 90%; 85 is a floor that catches a real drop without
     # flapping on small changes.
