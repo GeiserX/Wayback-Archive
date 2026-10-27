@@ -23,7 +23,7 @@ pytest tests/ -q --cov=wayback_archive --cov-fail-under=85
 
 The tests never reach the network. An autouse guard in `tests/conftest.py` refuses every connection that is not to localhost, so a test that needs a response mocks it or serves it from a local server.
 
-CI runs the suite on Python 3.10 to 3.14 on Linux, and on Python 3.13 on macOS. The Python versions in the CI matrix and the classifiers in `pyproject.toml` must match; `tests/test_packaging.py` fails when they do not.
+CI runs the suite on Python 3.10 to 3.14 on Linux, and on Python 3.13 on Windows and macOS. The Python versions in the CI matrix and the classifiers in `pyproject.toml` must match; `tests/test_packaging.py` fails when they do not.
 
 ## Docs
 

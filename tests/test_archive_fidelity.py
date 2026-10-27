@@ -104,7 +104,7 @@ class TestWholeSiteSurvivesArchiving:
             downloader.download()
 
         written = {
-            str(p.relative_to(output_dir)): p.read_text("utf-8", "replace")
+            p.relative_to(output_dir).as_posix(): p.read_text("utf-8", "replace")
             for p in output_dir.rglob("*")
             if p.is_file()
         }
@@ -468,7 +468,7 @@ class TestExtensionlessAssetsEndToEnd:
         with contextlib.redirect_stdout(io.StringIO()):
             downloader.download()
 
-        written = {str(p.relative_to(output_dir)) for p in output_dir.rglob("*") if p.is_file()}
+        written = {p.relative_to(output_dir).as_posix() for p in output_dir.rglob("*") if p.is_file()}
         assert "css/main.css" in written
         assert "js/bundle.js" in written
 

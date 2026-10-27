@@ -253,7 +253,7 @@ class TestLiveFallbackIsCdnOnly:
         )
         with contextlib.redirect_stdout(io.StringIO()):
             dl.download()
-        files = {str(p.relative_to(output_dir)) for p in output_dir.rglob("*") if p.is_file()}
+        files = {p.relative_to(output_dir).as_posix() for p in output_dir.rglob("*") if p.is_file()}
         return dl.session, files
 
     def test_only_allowlisted_cdn_hosts_are_fetched_live(self, tmp_path):
@@ -479,7 +479,7 @@ class TestGoogleFontsIsAHostMatch:
         dl.session = _FakeSession({"http://example.com/": page})
         with contextlib.redirect_stdout(io.StringIO()):
             dl.download()
-        files = {str(p.relative_to(output_dir)) for p in output_dir.rglob("*") if p.is_file()}
+        files = {p.relative_to(output_dir).as_posix() for p in output_dir.rglob("*") if p.is_file()}
         return dl.session, files
 
     @pytest.mark.parametrize(
