@@ -6,7 +6,7 @@ All notable changes to this project are listed here. The format follows
 
 ## [Unreleased]
 
-<!-- lanes: add under Unreleased -->
+## [1.6.0] - 2026-10-27
 
 ### Added
 
@@ -104,7 +104,8 @@ All notable changes to this project are listed here. The format follows
 - Inline `style="...url(...)"` references kept pointing at the live site.
 - Links to files whose names hold `#` or `?`, stylesheet `url()` paths, CDN root URLs and extensionless assets could point at a file that was never written.
 
-[Unreleased]: https://github.com/GeiserX/Wayback-Archive/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/GeiserX/Wayback-Archive/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/GeiserX/Wayback-Archive/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/GeiserX/Wayback-Archive/compare/v1.4.6...v1.5.0
 [1.4.6]: https://github.com/GeiserX/Wayback-Archive/compare/v1.4.5...v1.4.6
 [1.4.5]: https://github.com/GeiserX/Wayback-Archive/compare/v1.4.4...v1.4.5
