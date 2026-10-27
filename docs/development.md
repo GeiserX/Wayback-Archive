@@ -49,7 +49,7 @@ Set `__version__` in `wayback_archive/__init__.py`, move the `[Unreleased]` entr
 
 1. checks that the tag matches `__version__`, builds the wheel and sdist, and installs the sdist in a clean environment;
 2. publishes them to PyPI and attaches them to the GitHub release;
-3. pushes `geiserx/wayback-archive:X.Y.Z` and `:X.Y` to Docker Hub, for amd64 and arm64.
+3. pushes `drumsergio/wayback-archive:X.Y.Z` and `:X.Y` to Docker Hub, for amd64 and arm64.
 
 Running the workflow by hand on a tag (`gh workflow run release.yml --ref vX.Y.Z`) does step 1 only.
 

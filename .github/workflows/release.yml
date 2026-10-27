@@ -120,7 +120,7 @@ jobs:
         GH_TOKEN: ${{ github.token }}
       run: gh release upload "$GITHUB_REF_NAME" dist/* --clobber -R "$GITHUB_REPOSITORY"
 
-  # Publishes geiserx/wayback-archive:<version> and :<major>.<minor>, never
+  # Publishes drumsergio/wayback-archive:<version> and :<major>.<minor>, never
   # :latest, for amd64 and arm64.
   docker-publish:
     if: github.event_name == 'release'
@@ -147,11 +147,11 @@ jobs:
       env:
         VERSION: ${{ needs.build.outputs.version }}
       run: |
-        tags="geiserx/wayback-archive:$VERSION"
+        tags="drumsergio/wayback-archive:$VERSION"
         # A prerelease (1.6.0rc1) gets its own tag only; :<major>.<minor> moves
         # only for a final X.Y.Z release.
         if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-          tags="$tags,geiserx/wayback-archive:${VERSION%.*}"
+          tags="$tags,drumsergio/wayback-archive:${VERSION%.*}"
         fi
         echo "tags=$tags" >> "$GITHUB_OUTPUT"
 

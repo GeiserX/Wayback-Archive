@@ -103,7 +103,7 @@ def test_distributions_are_attached_to_the_release():
 
 def test_docker_image_is_never_tagged_latest():
     job = _job("docker-publish")
-    assert "geiserx/wayback-archive:$VERSION" in job
+    assert "drumsergio/wayback-archive:$VERSION" in job
     assert ":latest" not in job
     secrets_check = _steps(job)[0]
     assert "DOCKERHUB_TOKEN" in secrets_check and "exit 1" in secrets_check
@@ -123,7 +123,7 @@ def _image_tags(version, tmp_path):
 def test_minor_tag_moves_only_for_a_final_release(tmp_path):
     # A prerelease such as 1.6.0rc1 must not move :1.6 off the last final release.
     assert _image_tags("1.6.0", tmp_path) == [
-        "geiserx/wayback-archive:1.6.0",
-        "geiserx/wayback-archive:1.6",
+        "drumsergio/wayback-archive:1.6.0",
+        "drumsergio/wayback-archive:1.6",
     ]
-    assert _image_tags("1.6.0rc1", tmp_path) == ["geiserx/wayback-archive:1.6.0rc1"]
+    assert _image_tags("1.6.0rc1", tmp_path) == ["drumsergio/wayback-archive:1.6.0rc1"]

@@ -64,7 +64,7 @@ docker run --rm \
   -e WAYBACK_URL="https://web.archive.org/web/20051231235226/http://www.python.org/" \
   -e MAX_FILES=50 \
   -v "$PWD/output:/output" \
-  geiserx/wayback-archive:1.6.0
+  drumsergio/wayback-archive:1.6.0
 ```
 
 Tags are the release version (`1.6.0`) and its minor line (`1.6`); there is no `latest`.
