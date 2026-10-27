@@ -1,5 +1,6 @@
 import ipaddress
 import socket
+import sys
 
 import pytest
 
@@ -18,6 +19,20 @@ def _is_local(address):
 
 
 _PROXY_VARS = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")
+
+
+@pytest.fixture(autouse=True)
+def _clean_config_env(monkeypatch):
+    """Start every test with none of the variables Config reads, so settings
+    exported in the developer's shell cannot change a result, and with no
+    command-line arguments, so cli.main() does not parse pytest's own."""
+    monkeypatch.setattr(sys, "argv", ["wayback-archive"])
+    try:
+        from wayback_archive.config import Config
+    except ImportError:  # test_no_network runs this file outside the project
+        return
+    for name in Config.ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture(autouse=True)
