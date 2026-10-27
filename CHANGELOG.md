@@ -37,7 +37,7 @@ All notable changes to this project are listed here. The format follows
 ### Fixed
 
 - SVG images that start with `<!DOCTYPE svg` are kept instead of being dropped as corrupted fonts, and old latin-1 pages keep characters they used to lose (#74).
-- A page whose start page was saved raw but could not be processed now fails with exit 1 instead of reporting success (#76).
+- A run whose start page was saved raw but could not be processed now exits 1 instead of reporting success (#76).
 - `Files skipped (duplicates)` counts duplicates; it was always 0 (#76).
 
 ### Security
