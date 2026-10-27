@@ -1,0 +1,9 @@
+# Only what `pip install .` reads goes into the build context.
+*
+!pyproject.toml
+!README.md
+!MANIFEST.in
+!LICENSE
+!config/requirements.txt
+!wayback_archive/
+wayback_archive/**/__pycache__

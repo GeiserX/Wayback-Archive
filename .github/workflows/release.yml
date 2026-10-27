@@ -5,35 +5,47 @@ on:
   # and a draft that is published later.
   release:
     types: [published]
+  # A dry run: builds and checks the distributions of the ref it runs on, and
+  # never publishes. Run it on the tag (`gh workflow run release.yml --ref vX.Y.Z`),
+  # or the version check fails.
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  publish:
+  build:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
 
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
 
     - name: Set up Python
-      uses: actions/setup-python@v7
+      uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
       with:
-        python-version: "3.11"
+        python-version: "3.13"
 
     # A tag that disagrees with __version__ would build and upload a version
     # nobody asked for. The package root has no imports, so this needs no deps.
+    # It runs on every event, so a dry run checks the same thing a release does.
     - name: Check the tag matches the package version
-      if: github.event_name == 'release'
+      id: version
       run: |
         version=$(python -c "import wayback_archive; print(wayback_archive.__version__)")
         if [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
-          echo "::error::Tag $GITHUB_REF_NAME does not match wayback_archive.__version__ $version"
+          echo "::error::Ref $GITHUB_REF_NAME does not match wayback_archive.__version__ $version"
           exit 1
         fi
+        echo "version=$version" >> "$GITHUB_OUTPUT"
 
     - name: Install build dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install build twine
+        pip install build==1.6.1 twine==7.0.0
 
     - name: Build package
       run: python -m build
@@ -51,21 +63,106 @@ jobs:
         cd /tmp && /tmp/sdist-check/bin/python -c "import os, wayback_archive, wayback_archive.downloader; p = os.path.dirname(wayback_archive.__file__); assert 'site-packages' in p, p; print('sdist ok', wayback_archive.__version__, p)"
 
     - name: Upload built distributions
-      uses: actions/upload-artifact@v7
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: wayback-archive-dist
         path: dist/*
         if-no-files-found: error
 
+  # Publishes exactly the files the build job checked. Only a published release
+  # gets here; a dispatched run stops after the build.
+  #
+  # Next step: Trusted Publishing. Once PyPI trusts this workflow and the `pypi`
+  # environment, add `id-token: write` below, delete the two Python steps and
+  # replace the twine step with
+  #   - uses: pypa/gh-action-pypi-publish@<sha> # vX.Y.Z
+  # which reads dist/ and needs no token.
+  publish:
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      # Attaches the distributions to the GitHub release.
+      contents: write
+
+    steps:
+    - name: Download built distributions
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        name: wayback-archive-dist
+        path: dist
+
+    - name: Set up Python
+      uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+      with:
+        python-version: "3.13"
+
+    - name: Install twine
+      run: pip install twine==7.0.0
+
     # The token lives in this step only: a job-level env would hand it to
-    # every step above, including pip installs and the build backend.
+    # every step above, including pip installs. A missing token fails the
+    # release instead of reporting green with nothing on PyPI.
     - name: Publish to PyPI
       env:
         TWINE_USERNAME: __token__
         TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
       run: |
         if [ -z "$TWINE_PASSWORD" ]; then
-          echo "::warning::PYPI_API_TOKEN is not set — built but not published to PyPI."
-          exit 0
+          echo "::error::PYPI_API_TOKEN is not set; nothing was published to PyPI."
+          exit 1
         fi
         twine upload dist/*
+
+    - name: Attach the distributions to the GitHub release
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: gh release upload "$GITHUB_REF_NAME" dist/* --clobber -R "$GITHUB_REPOSITORY"
+
+  # Publishes geiserx/wayback-archive:<version> and :<major>.<minor>, never
+  # :latest, for amd64 and arm64.
+  docker-publish:
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Check the Docker Hub secrets are set
+      env:
+        DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      run: |
+        if [ -z "$DOCKERHUB_USERNAME" ] || [ -z "$DOCKERHUB_TOKEN" ]; then
+          echo "::error::DOCKERHUB_USERNAME or DOCKERHUB_TOKEN is not set; no image was published."
+          exit 1
+        fi
+
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+
+    - name: Work out the image tags
+      id: tags
+      env:
+        VERSION: ${{ needs.build.outputs.version }}
+      run: |
+        minor=$(echo "$VERSION" | cut -d. -f1,2)
+        echo "tags=geiserx/wayback-archive:$VERSION,geiserx/wayback-archive:$minor" >> "$GITHUB_OUTPUT"
+
+    - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+
+    - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+    - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    - name: Build and push the image
+      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      with:
+        context: .
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: ${{ steps.tags.outputs.tags }}
