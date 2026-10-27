@@ -1,5 +1,15 @@
 # Usage
 
+Pass the Wayback Machine URL as the first argument and options as flags. The same command works in every shell:
+
+```bash
+wayback-archive "https://web.archive.org/web/20051231235226/http://www.python.org/" -o ./my_website --no-remove-clickable-contacts
+```
+
+`--no-remove-clickable-contacts` keeps email and phone links. Every flag, its environment variable and its default are in [Configuration](configuration.md).
+
+Environment variables set the same options, which suits scripts and containers; a flag given on the command line wins over them.
+
 ## macOS / Linux
 
 ```bash
@@ -29,6 +39,23 @@ set REMOVE_CLICKABLE_CONTACTS=false
 
 wayback-archive
 ```
+
+## From Python
+
+`wayback_archive.download()` runs the same download from a script:
+
+```python
+import wayback_archive
+
+wayback_archive.download(
+    "https://web.archive.org/web/20051231235226/http://www.python.org/",
+    output_dir="./my_website",
+    remove_clickable_contacts=False,
+    max_files=50,
+)
+```
+
+The keyword arguments are the flags' names with underscores (`optimize_html`, `minify_css`, `request_delay`, ...). An option left out comes from its environment variable, then its default. An invalid value raises `ValueError`, an unknown option `TypeError`, and a run that saves nothing or is stopped by the Wayback Machine raises `RuntimeError`.
 
 ## Quick Test
 

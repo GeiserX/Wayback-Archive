@@ -22,10 +22,10 @@ Homebrew Python and the system Python on Debian and Ubuntu refuse a bare `pip in
 Then give it one Wayback Machine URL:
 
 ```bash
-WAYBACK_URL="https://web.archive.org/web/20051231235226/http://www.python.org/" MAX_FILES=50 wayback-archive
+wayback-archive "https://web.archive.org/web/20051231235226/http://www.python.org/" --max-files 50
 ```
 
-The copy lands in `./output` (set `OUTPUT_DIR` to change it). `MAX_FILES=50` keeps the first try to about a minute, and on this snapshot the homepage, its stylesheet and its images are all within those 50 files, so the copy opens styled. Drop `MAX_FILES` to fetch the whole site. On another site a short run can stop before a stylesheet that is only reached through `@import`, because the crawl fetches files in the order it finds them. Every setting is in [Configuration](configuration.md); per-shell examples are in [Usage](usage.md).
+The copy lands in `./output` (`-o DIR` changes it). `--max-files 50` keeps the first try to about a minute, and on this snapshot the homepage, its stylesheet and its images are all within those 50 files, so the copy opens styled. Drop `--max-files` to fetch the whole site. On another site a short run can stop before a stylesheet that is only reached through `@import`, because the crawl fetches files in the order it finds them. Every setting is a flag or an environment variable (`WAYBACK_URL`, `MAX_FILES`, ...), listed in [Configuration](configuration.md) and by `wayback-archive --help`; per-shell examples are in [Usage](usage.md).
 
 ## What a finished run looks like
 

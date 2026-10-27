@@ -1,6 +1,10 @@
 """Configuration management for Wayback-Archive."""
 
+import math
 import os
+
+_TRUE = ("true", "1", "yes", "on")
+_FALSE = ("false", "0", "no", "off")
 
 
 def get_bool_env(key: str, default: bool = False) -> bool:
@@ -15,54 +19,104 @@ def get_str_env(key: str, default: str | None = None) -> str | None:
 
 
 class Config:
-    """Configuration class for Wayback-Archive."""
+    """Configuration class for Wayback-Archive.
 
-    def __init__(self):
-        # Required
-        self.wayback_url: str | None = get_str_env("WAYBACK_URL")
+    Every option comes from, in order: an explicit override
+    (Config(optimize_html=False), which is how the command-line flags and
+    the Python API set it), the environment variable, then the default.
+    An invalid value is collected in self.errors and reported by validate().
+    """
 
-        # Output
-        self.output_dir: str = get_str_env("OUTPUT_DIR", "./output")
+    # (attribute, environment variable, default) of every on/off option.
+    BOOL_OPTIONS = (
+        ("optimize_html", "OPTIMIZE_HTML", True),
+        ("optimize_images", "OPTIMIZE_IMAGES", False),
+        ("minify_js", "MINIFY_JS", False),
+        ("minify_css", "MINIFY_CSS", False),
+        ("remove_trackers", "REMOVE_TRACKERS", True),
+        ("remove_ads", "REMOVE_ADS", True),
+        ("remove_clickable_contacts", "REMOVE_CLICKABLE_CONTACTS", True),
+        ("remove_external_iframes", "REMOVE_EXTERNAL_IFRAMES", False),
+        ("remove_external_links_keep_anchors", "REMOVE_EXTERNAL_LINKS_KEEP_ANCHORS", True),
+        ("remove_external_links_remove_anchors", "REMOVE_EXTERNAL_LINKS_REMOVE_ANCHORS", False),
+        ("make_internal_links_relative", "MAKE_INTERNAL_LINKS_RELATIVE", True),
+        ("make_non_www", "MAKE_NON_WWW", True),
+        ("make_www", "MAKE_WWW", False),
+    )
+    # (attribute, environment variable, default) of the other options.
+    VALUE_OPTIONS = (
+        ("wayback_url", "WAYBACK_URL", None),
+        ("output_dir", "OUTPUT_DIR", "./output"),
+        ("max_files", "MAX_FILES", None),
+        ("request_delay", "REQUEST_DELAY", 0.0),
+    )
+    # Every environment variable Config reads.
+    ENV_VARS = tuple(env for _, env, _ in BOOL_OPTIONS + VALUE_OPTIONS)
 
-        # HTML optimization
-        self.optimize_html: bool = get_bool_env("OPTIMIZE_HTML", True)
+    def __init__(self, **overrides):
+        known = {name for name, _, _ in self.BOOL_OPTIONS + self.VALUE_OPTIONS}
+        unknown = sorted(set(overrides) - known)
+        if unknown:
+            raise TypeError(f"unknown option(s): {', '.join(unknown)}")
+        self.errors: list[str] = []
+        explicit = set()
 
-        # Image optimization
-        self.optimize_images: bool = get_bool_env("OPTIMIZE_IMAGES", False)
+        for name, env, default in self.BOOL_OPTIONS:
+            value, label = self._raw(overrides, name, env)
+            if value is None:
+                setattr(self, name, default)
+                continue
+            explicit.add(name)
+            if isinstance(value, bool):
+                setattr(self, name, value)
+                continue
+            text = str(value).strip().lower()
+            if text in _TRUE:
+                setattr(self, name, True)
+            elif text in _FALSE:
+                setattr(self, name, False)
+            else:
+                setattr(self, name, default)
+                self.errors.append(f"{label} must be one of true/false/1/0/yes/no/on/off, got {value!r}")
 
-        # Minification
-        self.minify_js: bool = get_bool_env("MINIFY_JS", False)
-        self.minify_css: bool = get_bool_env("MINIFY_CSS", False)
-
-        # Content removal
-        self.remove_trackers: bool = get_bool_env("REMOVE_TRACKERS", True)
-        self.remove_ads: bool = get_bool_env("REMOVE_ADS", True)
-        self.remove_clickable_contacts: bool = get_bool_env("REMOVE_CLICKABLE_CONTACTS", True)
-        self.remove_external_iframes: bool = get_bool_env("REMOVE_EXTERNAL_IFRAMES", False)
-
-        # External links handling
-        self.remove_external_links_keep_anchors: bool = get_bool_env("REMOVE_EXTERNAL_LINKS_KEEP_ANCHORS", True)
-        self.remove_external_links_remove_anchors: bool = get_bool_env("REMOVE_EXTERNAL_LINKS_REMOVE_ANCHORS", False)
-
-        # Link conversion
-        self.make_internal_links_relative: bool = get_bool_env("MAKE_INTERNAL_LINKS_RELATIVE", True)
-        self.make_non_www: bool = get_bool_env("MAKE_NON_WWW", True)
-        self.make_www: bool = get_bool_env("MAKE_WWW", False)
         if self.make_www:
+            if self.make_non_www and "make_non_www" in explicit:
+                self.errors.append("MAKE_WWW and MAKE_NON_WWW cannot both be true")
             # Asking for www means never stripping it; with the MAKE_NON_WWW
             # default still on, every host was flipped both ways.
             self.make_non_www = False
 
+        # Required
+        value, _ = self._raw(overrides, "wayback_url", "WAYBACK_URL")
+        self.wayback_url: str | None = None if value is None else str(value)
+
+        # Output
+        value, _ = self._raw(overrides, "output_dir", "OUTPUT_DIR")
+        self.output_dir: str = "./output" if value is None else str(value)
+
         # Download limit (for testing): how many files to try. Unset or
         # empty means unlimited; anything but a positive integer is an error.
-        max_files_str = (get_str_env("MAX_FILES") or "").strip()
+        value, label = self._raw(overrides, "max_files", "MAX_FILES")
         self.max_files: int | None = None
-        self.max_files_error: str | None = None
-        if max_files_str:
-            if max_files_str.isascii() and max_files_str.isdigit() and int(max_files_str) > 0:
-                self.max_files = int(max_files_str)
+        if value is not None:
+            text = str(value).strip()
+            if not isinstance(value, bool) and text.isascii() and text.isdigit() and int(text) > 0:
+                self.max_files = int(text)
             else:
-                self.max_files_error = f"MAX_FILES must be a positive whole number, got {max_files_str!r}"
+                self.errors.append(f"{label} must be a positive whole number, got {value!r}")
+
+        # Seconds to wait between requests to the Wayback Machine.
+        value, label = self._raw(overrides, "request_delay", "REQUEST_DELAY")
+        self.request_delay: float = 0.0
+        if value is not None:
+            try:
+                delay = float(str(value).strip())
+            except ValueError:
+                delay = -1.0
+            if isinstance(value, bool) or not math.isfinite(delay) or delay < 0:
+                self.errors.append(f"{label} must be a number of seconds, 0 or more, got {value!r}")
+            else:
+                self.request_delay = delay
 
         # Internal state
         self.base_url: str | None = None
@@ -70,12 +124,22 @@ class Config:
         self.visited_urls: set = set()
         self.downloaded_files: dict = {}  # URL -> local path mapping
 
+    @staticmethod
+    def _raw(overrides: dict, name: str, env: str):
+        """The value an option was given and what to call it in an error: the
+        override when there is one, else the environment variable. None or a
+        blank string means not given, so the default applies."""
+        for value, label in ((overrides.get(name), name), (os.getenv(env), env)):
+            if value is not None and str(value).strip():
+                return value, label
+        return None, env
+
     def validate(self) -> tuple[bool, str | None]:
         """Validate configuration."""
         if not self.wayback_url:
-            return False, "WAYBACK_URL environment variable is required"
-        if self.max_files_error:
-            return False, self.max_files_error
+            return False, "a Wayback URL is required: pass it as the first argument or set WAYBACK_URL"
+        if self.errors:
+            return False, self.errors[0]
         return True, None
 
     def __repr__(self) -> str:
