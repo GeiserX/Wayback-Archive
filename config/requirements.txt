@@ -4,8 +4,6 @@
 requests>=2.32.0
 beautifulsoup4>=4.12.0
 minify-html>=0.15.0
-# cssmin leaves once downloader.py imports rcssmin instead.
-cssmin>=0.2.0
 rcssmin>=1.1.0
 rjsmin>=1.2.0
 Pillow>=10.0.0

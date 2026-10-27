@@ -29,10 +29,15 @@ python3 -m http.server 8080  # Use a different port
 ## Font loading issues
 
 - **Google Fonts**: Downloaded automatically to avoid CORS issues
-- **Corrupted fonts**: Detected and removed from CSS automatically
+- **Corrupted fonts**: Detected and removed from `@font-face` rules automatically, matched by their whole path
+- **Legacy formats**: `.eot` and `.svg` entries are dropped from an `@font-face` rule that also lists `.woff2`, `.woff` or `.ttf`. A rule with only legacy formats keeps them, so the font still has a source
 - **Missing fonts**: Some fonts may not exist in the Wayback Machine archive
 
 See [Font Loading Research Notes](https://github.com/GeiserX/Wayback-Archive/blob/main/docs/FONT_LOADING.md) for details.
+
+## Words run together or code blocks lose their indentation
+
+HTML minification (`OPTIMIZE_HTML=true`) removes the space between inline elements such as `<span>a</span> <span>b</span>` and collapses text styled `white-space: pre`. It is off by default; leave it off when the copy has to look like the original.
 
 ## Missing links or icons
 

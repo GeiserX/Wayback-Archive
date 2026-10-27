@@ -712,7 +712,7 @@ class TestMinification:
 
         fake_module = MagicMock()
         fake_module.cssmin = Mock(side_effect=Exception("fail"))
-        with patch.dict(sys.modules, {"cssmin": fake_module}):
+        with patch.dict(sys.modules, {"rcssmin": fake_module}):
             result = self.dl._minify_css(css)
             assert result == css
 
@@ -852,7 +852,7 @@ class TestRemoveLegacyFontFormats:
         _cleanup_env("WAYBACK_URL")
 
     def test_removes_eot_reference(self):
-        css = "@font-face { src: url('font.eot'); }"
+        css = "@font-face { src: url('font.eot'); src: url('font.woff'); }"
         result = self.dl._remove_legacy_font_formats_from_css(css)
         assert ".eot" not in result
 
@@ -1223,7 +1223,7 @@ class TestProcessHtml:
         assert "banner-styles.css" not in processed
 
     def test_removes_inline_wayback_scripts(self):
-        html = "<html><body><script>var __wm = {wombat: true};</script><p>Content</p></body></html>"
+        html = '<html><body><script>__wm.init("https://web.archive.org/web");</script><p>Content</p></body></html>'
         processed, _ = self.dl._process_html(html, "http://example.com/")
         assert "__wm" not in processed
 
@@ -1319,9 +1319,9 @@ class TestProcessHtml:
         assert any("app.js" in l for l in links)
 
     def test_removes_html_comments(self):
-        html = "<html><body><!-- This is a comment --><p>Content</p></body></html>"
+        html = "<html><body><!-- FILE ARCHIVED ON 12:00 AND RETRIEVED FROM THE INTERNET ARCHIVE --><p>Content</p></body></html>"
         processed, _ = self.dl._process_html(html, "http://example.com/")
-        assert "This is a comment" not in processed
+        assert "FILE ARCHIVED ON" not in processed
 
     def test_static_stub_injection(self):
         html = "<html><body><script>Static.SQUARESPACE_CONTEXT = {};</script></body></html>"
@@ -1840,7 +1840,9 @@ class TestContentTypeDetection:
         content = b"<html><body>Test</body></html>"
         dl.download_file = Mock(return_value=content)
         dl._process_html = Mock(side_effect=Exception("parse error"))
-        dl.download()
+        # The page counts as failed: saved raw, no links followed.
+        with pytest.raises(RuntimeError, match="saved raw but could not be processed"):
+            dl.download()
         assert (tmp_path / "index.html").read_bytes() == content
 
     def test_squarespace_cdn_in_inline_styles(self, tmp_path):

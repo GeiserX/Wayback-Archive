@@ -1488,6 +1488,17 @@ class WaybackDownloader:
         else:
             return "Asset"
 
+    def _unwrap_wayback(self, value: str) -> str:
+        """
+        The original address of a reference Wayback wrote in its own form.
+
+        Used for references to another site that the archive does not
+        download: /web/<ts>im_/https://cdn.other.com/x.png is a dead path
+        offline and a Wayback request online, https://cdn.other.com/x.png is
+        what the page had. Anything else comes back unchanged.
+        """
+        return self._extract_original_url_from_path(value) or value
+
     def _optimize_html(self, html: str) -> str:
         """Optimize HTML code."""
         if not self.config.optimize_html:
@@ -1549,73 +1560,130 @@ class WaybackDownloader:
 
         return css
 
-    def _remove_corrupted_fonts_from_css(self, css: str) -> str:
+    # One src entry: url(), its format() and the comma joining it to the
+    # entry before. [^"'()] keeps a match inside its own url().
+    _FONT_SRC_ENTRY = re.compile(
+        r'(,\s*)?url\s*\(\s*(["\']?)([^"\'()]*)\2\s*\)(?:\s*format\s*\([^)]*\))?', re.IGNORECASE
+    )
+    _FONT_FACE_BLOCK = re.compile(r"@font-face\s*\{[^{}]*\}", re.IGNORECASE)
+
+    @staticmethod
+    def _tidy_font_src(block: str) -> str:
+        """Drop the commas and empty src: an entry removal leaves behind."""
+        block = re.sub(r",\s*,+", ",", block)
+        block = re.sub(r",\s*(?=[;}])", "", block)
+        block = re.sub(r"(src\s*:)\s*,", r"\1", block, flags=re.IGNORECASE)
+        return re.sub(r"src\s*:\s*(?:;|(?=\}))", "", block, flags=re.IGNORECASE)
+
+    @staticmethod
+    def _font_ref_names(reference: str, font_url: str) -> bool:
+        """
+        True when a url() reference in a stylesheet names this font URL.
+
+        The reference may still be the absolute URL, or the local path the
+        rewrite wrote (../fonts/a.woff, fonts.gstatic.com/s/x.woff2), so it
+        is compared on everything it names: host and path when absolute, the
+        whole relative path otherwise. Query and fragment do not count.
+        """
+        ref = unquote(re.split(r"[?#]", reference.strip(), maxsplit=1)[0])
+        font = urlparse(font_url)
+        font_path = unquote(font.path)
+        if not ref:
+            return False
+        if ref.startswith("//") or re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", ref):
+            parsed = urlparse("https:" + ref if ref.startswith("//") else ref)
+            return (parsed.hostname or "").removeprefix("www.") == (font.hostname or "").removeprefix(
+                "www."
+            ) and unquote(parsed.path) == font_path
+        if ref.startswith("/"):
+            return ref == font_path
+        tail = re.sub(r"^(?:\.\.?/)+", "", ref)
+        # With no stylesheet to resolve against, a bare file name names only
+        # a font with no folder: a.woff in /css/ is not /fonts/a.woff.
+        if not tail or ("/" not in tail and "/" in font_path.lstrip("/")):
+            return False
+        return any(("/" + full).endswith("/" + tail) for full in (font_path.lstrip("/"), f"{font.netloc}{font_path}"))
+
+    def _local_font_ref_names(self, reference: str, font_url: str, from_dir: str) -> bool | None:
+        """
+        Whether a page-relative reference names this font's local file.
+
+        Answers None for a reference that is not page-relative, which
+        _font_ref_names then judges.
+        """
+        ref = unquote(re.split(r"[?#]", reference.strip(), maxsplit=1)[0])
+        if not ref or ref.startswith(("/", "//")) or self._HAS_SCHEME.match(ref):
+            return None
+        try:
+            font_file = self._output_relative_url(self._get_local_path(font_url, "asset"))
+        except Exception:
+            return None
+        return posixpath.normpath(posixpath.join(from_dir, ref)) == posixpath.normpath(font_file)
+
+    def _remove_corrupted_fonts_from_css(self, css: str, css_url: str | None = None) -> str:
         """Remove references to corrupted font files from CSS.
 
         This prevents browsers from trying to load HTML error pages as fonts,
-        which can break typography.
+        which can break typography. Only @font-face blocks are touched, and a
+        reference goes only when its whole path names a corrupted font: two
+        fonts sharing a file name in different folders are different fonts.
+
+        Args:
+            css: The CSS, after _rewrite_css_urls.
+            css_url: The URL of the stylesheet or page the CSS belongs to.
+                Its relative references are resolved from that file's local
+                folder; without it they are matched on their path alone.
         """
         if not self.corrupted_fonts:
             return css
 
-        # For each corrupted font, remove its references from CSS
-        for corrupted_font_url in self.corrupted_fonts:
-            font_filename = os.path.basename(urlparse(corrupted_font_url).path)
-            if not font_filename:
-                continue
+        from_dir = None
+        if css_url:
+            try:
+                from_dir = self._output_relative_url(self._get_local_path(css_url).parent)
+            except Exception:
+                from_dir = None
 
-            # One url() entry naming this file in any directory, with its
-            # query or fragment, its format() and the comma joining it to the
-            # entry before. [^"'()] keeps a match inside its own url(), so it
-            # cannot run on into the rules that follow.
-            pattern = (
-                rf'(?:,\s*)?url\s*\(\s*["\']?(?:[^"\'()]*/)?{re.escape(font_filename)}'
-                rf'(?:[?#][^"\'()]*)?["\']?\s*\)(?:\s*format\s*\([^)]*\))?'
-            )
-            css = re.sub(pattern, "", css, flags=re.IGNORECASE)
+        def names(reference: str, font: str) -> bool:
+            if from_dir is not None:
+                local = self._local_font_ref_names(reference, font, from_dir)
+                if local is not None:
+                    return local
+            return self._font_ref_names(reference, font)
 
-        # Clean up any double commas or trailing commas
-        css = re.sub(r",\s*,+", ",", css)  # Multiple commas
-        css = re.sub(r",\s*}", "}", css)  # Trailing comma before }
-        css = re.sub(r"src:\s*,", "src:", css)  # src: with leading comma
-        css = re.sub(r"src:\s*;", "", css)  # Empty src:;
+        def drop_entry(match):
+            if any(names(match.group(3), font) for font in self.corrupted_fonts):
+                return ""
+            return match.group(0)
 
-        return css
+        def clean_block(match):
+            block = self._FONT_SRC_ENTRY.sub(drop_entry, match.group(0))
+            return self._tidy_font_src(block) if block != match.group(0) else block
+
+        return self._FONT_FACE_BLOCK.sub(clean_block, css)
 
     def _remove_legacy_font_formats_from_css(self, css: str) -> str:
-        """Remove .eot and .svg font format references from CSS.
+        """Remove .eot and .svg font references from @font-face rules.
 
-        These legacy formats are often corrupted (HTML error pages) in Wayback Machine,
-        and modern browsers don't need them - they'll use .woff2, .woff, and .ttf.
+        These legacy formats are often corrupted (HTML error pages) in Wayback
+        Machine, and modern browsers use .woff2, .woff or .ttf instead. A rule
+        whose only sources are legacy keeps them: dropping them would leave
+        the font with no source at all. Nothing outside @font-face changes.
         """
-        # Remove .eot references (with or without format)
-        css = re.sub(
-            r',\s*url\s*\(\s*["\']?[^"\'()]*\.eot["\']?\s*\)\s*(?:format\s*\([^)]+\))?', "", css, flags=re.IGNORECASE
-        )
-        css = re.sub(
-            r'url\s*\(\s*["\']?[^"\'()]*\.eot["\']?\s*\)\s*(?:format\s*\([^)]+\))?', "", css, flags=re.IGNORECASE
-        )
-        css = re.sub(r'src:\s*url\s*\(\s*["\']?[^"\'()]*\.eot["\']?\s*\)\s*;', "", css, flags=re.IGNORECASE)
 
-        # Remove .svg font format references (but keep .svg images)
-        # Only remove if it's in a font context (has format("svg") or in @font-face)
-        css = re.sub(
-            r',\s*url\s*\(\s*["\']?[^"\'()]*\.svg["\']?\s*\)\s+format\s*\(["\']?svg["\']?\)',
-            "",
-            css,
-            flags=re.IGNORECASE,
-        )
-        css = re.sub(
-            r'url\s*\(\s*["\']?[^"\'()]*\.svg["\']?\s*\)\s+format\s*\(["\']?svg["\']?\)', "", css, flags=re.IGNORECASE
-        )
+        def is_legacy(reference: str) -> bool:
+            path = re.split(r"[?#]", reference, maxsplit=1)[0].lower()
+            return path.endswith((".eot", ".svg"))
 
-        # Clean up any double commas or trailing commas
-        css = re.sub(r",\s*,+", ",", css)  # Multiple commas
-        css = re.sub(r",\s*}", "}", css)  # Trailing comma before }
-        css = re.sub(r"src:\s*,", "src:", css)  # src: with leading comma
-        css = re.sub(r"src:\s*;", "", css)  # Empty src:;
+        def clean_block(match):
+            block = match.group(0)
+            entries = [m.group(3) for m in self._FONT_SRC_ENTRY.finditer(block)]
+            if not any(is_legacy(e) for e in entries) or all(is_legacy(e) for e in entries):
+                return block
+            block = self._FONT_SRC_ENTRY.sub(lambda m: "" if is_legacy(m.group(3)) else m.group(0), block)
+            return self._tidy_font_src(block)
 
-        return css
+        return self._FONT_FACE_BLOCK.sub(clean_block, css)
 
     def _minify_css(self, content: str) -> str:
         """Minify CSS."""
@@ -1623,9 +1691,11 @@ class WaybackDownloader:
             return content
 
         try:
-            import cssmin
+            # rcssmin keeps the spaces calc() and @supports need; cssmin
+            # turned calc(1px + -2px) into calc(1px+-2px), which is invalid.
+            import rcssmin
 
-            return cssmin.cssmin(content)
+            return rcssmin.cssmin(content)
         except Exception as e:
             print(f"Error minifying CSS: {e}")
             return content
@@ -1633,6 +1703,8 @@ class WaybackDownloader:
     def _extract_css_urls(self, css: str, base_url: str) -> list[str]:
         """Extract URLs from CSS content."""
         urls = []
+        # A commented-out rule loads nothing; CSS comments do not nest.
+        css = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
 
         # Extract @import URLs
         import_pattern = r'@import\s+(?:url\()?["\']?((?:[^"\'()]|\([^"\'()]*\))+)["\']?\)?'
@@ -1694,6 +1766,10 @@ class WaybackDownloader:
                     url_part = f"{parsed_base.scheme}://{parsed_base.netloc}{url_part}"
 
             normalized = self._normalize_url(url_part, base_url)
+            # Normalizing drops the fragment (sprite.svg#icon, filter.svg#f);
+            # the reference keeps it.
+            fragment = urlparse(url_part).fragment
+            fragment = "#" + fragment if fragment else ""
 
             # Handle fonts.gstatic.com URLs - these need to be converted to local paths
             # to avoid CORS issues when loading from localhost
@@ -1717,21 +1793,20 @@ class WaybackDownloader:
                     # stored (css-<hash>.css for a stylesheet), so the link
                     # goes through it like any other.
                     new_path = self._make_relative_path(normalized, reference_kind)
-                    return f"url({new_path})"
-                return f"url({normalized})"
+                    return f"url({new_path}{fragment})"
+                return f"url({normalized}{fragment})"
 
-            # If it's a Squarespace CDN URL, still rewrite it to local path
-            if is_squarespace_cdn:
-                parsed_resource = urlparse(normalized)
-                resource_path = f"{parsed_resource.netloc}{parsed_resource.path}"
-                # Remove leading slashes
-                while resource_path.startswith("/"):
-                    resource_path = resource_path[1:]
-                if self.config.make_internal_links_relative:
-                    return f"url(/{resource_path})"
-                return f"url({normalized})"
-
-            return full_match
+            # Another site's file: its own address, not the Wayback one
+            if not original:
+                return full_match
+            value = match.group(1)
+            if re.search(r"\s", value):
+                # The extractor stops at whitespace, which only a quoted
+                # url() can hold: strip the prefix and keep the quotes.
+                quote = re.match(r"url\s*\(\s*([\"']?)", full_match, re.IGNORECASE).group(1)
+                unwrapped = self._WAYBACK_WRAP.sub("", value, count=1)
+                return f"url({quote}{unwrapped}{quote})" if quote and unwrapped != value else full_match
+            return f"url({self._unwrap_wayback(value)})"
 
         def replace_bare_import(match):
             """Rewrite @import "path" - the form with no url() wrapper."""
@@ -1753,7 +1828,7 @@ class WaybackDownloader:
                 or self._is_squarespace_cdn(normalized)
                 or self._is_google_fonts_css(normalized)
             ):
-                return match.group(0)
+                return f'@import "{url_part}"' if original else match.group(0)
 
             # Note it before the branch below, which does not run with
             # relative links off - the import would then be downloaded as a
@@ -1835,16 +1910,32 @@ class WaybackDownloader:
             # Only re-encode a still image into the format it already is: a
             # favicon.ico came out as JPEG bytes, and an animated GIF as its
             # first frame.
-            if (img.format or "").upper() != format.upper() or getattr(img, "is_animated", False):
+            if (
+                (img.format or "").upper() != format.upper()
+                or getattr(img, "is_animated", False)
+                or getattr(img, "n_frames", 1) > 1
+            ):
+                return content
+            # A lossless WebP (VP8L chunk) would come back lossy. A stray
+            # match elsewhere in the file only skips the optimization.
+            if format.upper() == "WEBP" and b"VP8L" in content:
                 return content
 
+            # Colour profile and EXIF (orientation among it) shape how the
+            # image looks, so they go into the new file.
+            keep = {k: img.info[k] for k in ("icc_profile", "exif") if img.info.get(k)}
+
             # Convert only for JPEG (a CMYK one, say); PNG, GIF and WEBP keep
-            # their mode and so their transparency.
+            # their mode and so their transparency. A CMYK profile does not
+            # describe the RGB result, so it is not carried over.
             if format.upper() == "JPEG" and img.mode not in ("RGB", "L"):
                 img = img.convert("RGB")
+                keep.pop("icc_profile", None)
+            if format.upper() == "JPEG" and (img.info.get("progressive") or img.info.get("progression")):
+                keep["progressive"] = True
 
             output = BytesIO()
-            img.save(output, format=format, optimize=True, quality=85)
+            img.save(output, format=format, optimize=True, quality=85, **keep)
             optimized = output.getvalue()
             return optimized if len(optimized) < len(content) else content
         except Exception as e:
@@ -1895,8 +1986,8 @@ class WaybackDownloader:
             )
 
             if not (self._is_internal_url(normalized_srcset) or is_squarespace_cdn):
-                # Keep external URLs as-is
-                srcset_parts.append(item)
+                # Another site's image: its own address, not the Wayback one
+                srcset_parts.append(f"{self._unwrap_wayback(original_srcset)}{descriptor}" if original else item)
                 continue
 
             # Queue for download
@@ -1921,9 +2012,92 @@ class WaybackDownloader:
                 srcset_parts.append(f"{relative_path}{descriptor}")
         return ", ".join(srcset_parts)
 
-    # Attributes holding one URL that a <base href> re-bases.
-    _BASE_RELATIVE_ATTRS = ("href", "src", "poster", "data", "action", "background", "data-src")
+    # Attributes that load or link to what they name. Other attributes (alt,
+    # title, value, content) are text, even when the text is a URL.
+    URL_ATTRS = frozenset(
+        {
+            "href",
+            "src",
+            "poster",
+            "data",
+            "action",
+            "formaction",
+            "cite",
+            "background",
+            "longdesc",
+            "ping",
+            "data-src",
+            "data-srcset",
+            "data-bg",
+            "data-background",
+            "data-lazy-src",
+            "data-original",
+            "data-href",
+            "xlink:href",
+        }
+    )
+    # <meta content> is a URL only for these names (property=, name= or itemprop=).
+    URL_META_NAMES = frozenset(
+        {
+            "og:image",
+            "og:image:url",
+            "og:image:secure_url",
+            "twitter:image",
+            "twitter:image:src",
+            "msapplication-tileimage",
+            "image",
+        }
+    )
+    _SRCSET_ATTRS = ("srcset", "imagesrcset", "data-srcset")
+
+    # Text that only Wayback's own inline scripts contain. Plain "__wm" or
+    # "wombat" also matched site variables, and "web.archive.org" any site
+    # script that links to the archive.
+    WAYBACK_INLINE_SCRIPT_TOKENS = ("__wm.", "_wm.wombat", "wombat.js", "/_static/js/", "archive_analytics")
+    # Text of the comments Wayback adds around its toolbar and at the end of
+    # the page, compared lowercased.
+    WAYBACK_COMMENT_MARKERS = (
+        "wayback",
+        "web.archive.org",
+        "file archived on",
+        "playback timings",
+        "internet archive",
+    )
     _HAS_SCHEME = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*:")
+    # The Wayback part in front of an original http(s) address.
+    _WAYBACK_WRAP = re.compile(r"^(?:(?:https?:)?//web\.archive\.org)?/web/\d+(?:[a-z]+_)?/(?=https?://)")
+    # A Wayback-form http(s) address inside free text, such as a comment.
+    _WAYBACK_URL_IN_TEXT = re.compile(r"(?:(?:https?:)?//web\.archive\.org)?/web/\d+(?:[a-z]+_)?/https?://[^\"'\s<>]+")
+
+    def _is_url_attr(self, element, attr_name: str) -> bool:
+        """True when this attribute of this element names something to load or follow."""
+        if attr_name in self.URL_ATTRS:
+            return True
+        if element.name == "meta" and attr_name == "content":
+            meta_name = element.get("property") or element.get("name") or element.get("itemprop") or ""
+            return str(meta_name).lower() in self.URL_META_NAMES
+        return False
+
+    def _rewrite_conditional_comment_url(self, match, text: str, base_url: str, links_to_follow: list[str]) -> str:
+        """The link to write for a Wayback-form address inside an IE conditional comment."""
+        original = self._extract_original_url_from_path(match.group(0))
+        if not original:
+            return match.group(0)
+        normalized = self._normalize_url(original, base_url)
+        if not self._is_internal_url(normalized):
+            return original
+        if normalized not in self.config.visited_urls and normalized not in links_to_follow:
+            links_to_follow.append(normalized)
+        # The tag the address sits in says what it is (the extension may not).
+        tag = re.search(r"<\s*([a-zA-Z]+)[^<]*$", text[: match.start()])
+        kind = {"script": "script", "link": "stylesheet", "img": "image"}.get(
+            tag.group(1).lower() if tag else "", "asset"
+        )
+        if kind == "stylesheet":
+            self._note_reference_kind(normalized, kind)
+        if not self.config.make_internal_links_relative:
+            return normalized
+        return self._make_relative_path(normalized, kind)
 
     def _resolve_against_base(self, soup: BeautifulSoup, base_url: str) -> None:
         """
@@ -1953,9 +2127,14 @@ class WaybackDownloader:
             return css_url.sub(lambda m: f"url({m.group(1)}{resolve(m.group(2))}{m.group(1)})", css)
 
         for element in soup.find_all(True):
-            for attr_name in self._BASE_RELATIVE_ATTRS:
-                value = element.get(attr_name)
-                if isinstance(value, str):
+            for attr_name, value in list(element.attrs.items()):
+                if not isinstance(value, str):
+                    continue
+                if attr_name in self._SRCSET_ATTRS:
+                    element[attr_name] = ", ".join(
+                        f"{resolve(url)} {descriptor}".rstrip() for url, descriptor in self._split_srcset(value)
+                    )
+                elif self._is_url_attr(element, attr_name):
                     element[attr_name] = resolve(value)
             if isinstance(element.get("style"), str):
                 element["style"] = resolve_css(element["style"])
@@ -2041,11 +2220,15 @@ class WaybackDownloader:
             if meta_property == "og:url" and meta_content and "web.archive.org" in str(meta_content):
                 meta.decompose()
 
-        # Remove inline wayback scripts (__wm, __wm.wombat, RufflePlayer)
+        # Remove the inline scripts Wayback injects (__wm.init, __wm.wombat,
+        # archive_analytics, its Ruffle loader). A site script that only
+        # names web.archive.org or a "wombat" variable is the site's own.
         for script in soup.find_all("script"):
             if script.string:
                 script_content = script.string
-                if any(pattern in script_content for pattern in ["__wm", "wombat", "RufflePlayer", "web.archive.org"]):
+                if any(token in script_content for token in self.WAYBACK_INLINE_SCRIPT_TOKENS) or (
+                    "RufflePlayer" in script_content and "archive.org" in script_content
+                ):
                     script.decompose()
 
         # Add Static object stub if needed (for Squarespace sites)
@@ -2073,9 +2256,22 @@ class WaybackDownloader:
                 else:
                     first_script.insert_before(static_script)
 
-        # Remove comments
+        # Remove the comments Wayback adds (toolbar markers, the archive
+        # notice and playback timings). The site's own stay: IE conditional
+        # comments load scripts and styles, Knockout reads <!-- ko --> as code.
         for comment in soup.find_all(string=lambda text: isinstance(text, Comment)):
-            comment.extract()
+            if comment.strip().startswith("[if"):
+                # An IE conditional comment is markup: Wayback rewrote the
+                # addresses inside it like any other, so point them back.
+                original_text = str(comment)
+                text = self._WAYBACK_URL_IN_TEXT.sub(
+                    lambda m, t=original_text: self._rewrite_conditional_comment_url(m, t, base_url, links_to_follow),
+                    original_text,
+                )
+                if text != comment:
+                    comment.replace_with(Comment(text))
+            elif any(marker in comment.lower() for marker in self.WAYBACK_COMMENT_MARKERS):
+                comment.extract()
 
         # Remove trackers and analytics
         if self.config.remove_trackers:
@@ -2108,7 +2304,7 @@ class WaybackDownloader:
         # Remove external iframes
         if self.config.remove_external_iframes:
             for iframe in soup.find_all("iframe", src=True):
-                if not self._is_internal_url(iframe["src"]):
+                if not self._is_internal_url(self._unwrap_wayback(iframe["src"])):
                     iframe.decompose()
 
         # Process frames (<frame src="...">) and internal iframes
@@ -2135,6 +2331,8 @@ class WaybackDownloader:
 
                 if normalized_url not in self.config.visited_urls:
                     links_to_follow.append(original_url)
+            else:
+                frame["src"] = self._unwrap_wayback(frame["src"])
 
         # Process links
         for link in soup.find_all("a", href=True):
@@ -2402,6 +2600,8 @@ class WaybackDownloader:
 
                 if normalized_url not in self.config.visited_urls:
                     links_to_follow.append(original_url)
+            else:
+                img["src"] = self._unwrap_wayback(original_src)
 
         # Process HTML background attributes (legacy <body>, <table>, <td>, <tr>, <th>)
         for elem in soup.find_all(["body", "table", "td", "tr", "th"], attrs={"background": True}):
@@ -2420,6 +2620,8 @@ class WaybackDownloader:
                     elem["background"] = normalized_url
                 if normalized_url not in self.config.visited_urls:
                     links_to_follow.append(original_url)
+            else:
+                elem["background"] = self._unwrap_wayback(elem["background"])
 
         # Process srcset everywhere (img, picture > source, link
         # imagesrcset, lazy-load data-srcset): every candidate is rewritten
@@ -2536,6 +2738,8 @@ class WaybackDownloader:
 
                 if normalized_url not in self.config.visited_urls:
                     links_to_follow.append(original_url)
+            else:
+                script["src"] = self._unwrap_wayback(script["src"])
 
         # Process SVG use elements with xlink:href attributes
         for use_elem in soup.find_all("use"):
@@ -2571,6 +2775,9 @@ class WaybackDownloader:
                                 fragment = normalized_target + fragment
                             if normalized_target not in self.config.visited_urls:
                                 links_to_follow.append(normalized_target)
+                        elif target and not self._is_internal_url(normalized_target):
+                            # A sprite on another host keeps its address
+                            fragment = target + fragment
                         use_elem["xlink:href"] = fragment
                         if use_elem.get("href"):
                             use_elem["href"] = fragment
@@ -2616,6 +2823,8 @@ class WaybackDownloader:
 
                 if normalized_url not in self.config.visited_urls:
                     links_to_follow.append(normalized_url)
+            else:
+                link["href"] = self._unwrap_wayback(link["href"])
 
         # Process inline styles (background-image, etc.)
         for element in soup.find_all(style=True):
@@ -2638,7 +2847,7 @@ class WaybackDownloader:
             if "web.archive.org" in style or "/web/" in style or "url(" in style:
                 new_style = self._rewrite_css_urls(style, base_url)
                 # Remove references to corrupted fonts from inline styles
-                new_style = self._remove_corrupted_fonts_from_css(new_style)
+                new_style = self._remove_corrupted_fonts_from_css(new_style, self._current_page_url)
                 element["style"] = new_style
 
         # Process <style> tags in HTML (not just inline styles)
@@ -2657,7 +2866,7 @@ class WaybackDownloader:
                 # Rewrite URLs in style tag CSS
                 css_content = self._rewrite_css_urls(css_content, base_url)
                 # Remove references to corrupted fonts
-                css_content = self._remove_corrupted_fonts_from_css(css_content)
+                css_content = self._remove_corrupted_fonts_from_css(css_content, self._current_page_url)
                 style_tag.string = css_content
 
         # The two passes below rewrite URLs left in any attribute. Whatever
@@ -2673,6 +2882,9 @@ class WaybackDownloader:
             normalized = self._normalize_url(attr_value, base_url)
             is_sqcdn_norm = self._is_squarespace_cdn(normalized)
             if not (self._is_internal_url(normalized) or is_sqcdn_norm):
+                # Another site's file: its own address, not the Wayback one
+                if original:
+                    element[attr_name] = attr_value
                 return
             # Normalizing drops the fragment (#team, a sprite's #icon); the
             # attribute keeps it.
@@ -2726,6 +2938,14 @@ class WaybackDownloader:
                 if not (isinstance(attr_value, str) and self._is_single_url_attr(attr_name, attr_value)):
                     continue
                 attr_value = attr_value.strip()
+                # Text that reads like a URL (alt, title, an input's value,
+                # a meta description) is shown, not loaded: leave it, but a
+                # Wayback-form address still gets its original back.
+                if not (attr_name.startswith("data-") or self._is_url_attr(element, attr_name)):
+                    unwrapped = self._unwrap_wayback(attr_value)
+                    if unwrapped != attr_value:
+                        element[attr_name] = unwrapped
+                    continue
                 if (
                     base_domain in attr_value.lower()
                     or self._is_squarespace_cdn(attr_value)
@@ -2807,32 +3027,191 @@ class WaybackDownloader:
         self.config.domain = host
         return final
 
+    STATE_FILE = ".wayback-archive-state.json"
+    STATE_SAVE_EVERY = 25
+    MAX_FAILED_URLS_SHOWN = 50
+
+    def _write_file(self, path: Path, data: bytes | str, encoding: str | None = None) -> None:
+        """Write a file so that it is either complete or absent.
+
+        The bytes go to a temporary file in the same directory, which then
+        replaces the target in one step: a run killed mid-write leaves no
+        truncated file that a resumed run would take for a finished one.
+        """
+        if isinstance(data, str):
+            data = data.encode(encoding or "utf-8", errors="replace")
+        tmp = path.parent / f".wayback-archive-{os.getpid()}.part"
+        try:
+            with open(tmp, "wb") as f:
+                f.write(data)
+            os.replace(tmp, path)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
+
+    def _state_path(self) -> Path:
+        return Path(self.config.output_dir) / self.STATE_FILE
+
+    def _state_key_out(self, key: str) -> str:
+        """A visited key as the state file stores it: relative to output_dir,
+        so the same folder named another way still resumes."""
+        if key.startswith(("http://", "https://")):
+            return key
+        return Path(os.path.relpath(key, self.config.output_dir)).as_posix()
+
+    def _state_key_in(self, key: str) -> str:
+        if key.startswith(("http://", "https://")):
+            return key
+        return str(Path(self.config.output_dir) / key)
+
+    def _save_state(
+        self, start_url: str, queue, files_downloaded: int, failed_urls: list[str], files_skipped: int
+    ) -> None:
+        """Record where the crawl is, so an interrupted run can resume."""
+        import json
+
+        state = {
+            "version": 1,
+            "complete": False,
+            "wayback_url": self.config.wayback_url,
+            "start_url": start_url,
+            "original_timestamp": self.original_timestamp,
+            "base_url": self.config.base_url,
+            "domain": self.config.domain,
+            "visited": sorted(self._state_key_out(k) for k in self.config.visited_urls),
+            "queue": list(queue),
+            "files_downloaded": files_downloaded,
+            "failed_urls": failed_urls,
+            "files_skipped": files_skipped,
+            "corrupted_fonts": sorted(self.corrupted_fonts),
+            "path_kinds": self._path_kinds,
+            "kind_by_path": {self._state_key_out(k): v for k, v in self._kind_by_path.items()},
+        }
+        self._write_file(self._state_path(), json.dumps(state))
+
+    def _load_state(self, start_url: str) -> dict | None:
+        """Restore an interrupted run of this same Wayback URL; None to start fresh."""
+        import json
+
+        path = self._state_path()
+        if not path.is_file():
+            return None
+        try:
+            state = json.loads(path.read_text(encoding="utf-8"))
+            if state.get("version") != 1 or state.get("complete") is not False:
+                raise ValueError("not a resumable state")
+        except (OSError, ValueError, AttributeError) as e:
+            print(f"Ignoring {path}: {e}; starting fresh", flush=True)
+            return None
+        if state.get("start_url") != start_url or state.get("wayback_url") != self.config.wayback_url:
+            print(f"Ignoring {path}: it belongs to a run of {state.get('wayback_url')}; starting fresh", flush=True)
+            return None
+        # Read every field before changing anything, so a damaged file is
+        # ignored as a whole rather than half applied.
+        try:
+            timestamp = state["original_timestamp"]
+            original_datetime = datetime.strptime(timestamp, "%Y%m%d%H%M%S")
+            base_url, domain = str(state["base_url"]), str(state["domain"])
+            visited = [self._state_key_in(k) for k in state["visited"]]
+            corrupted_fonts = list(state["corrupted_fonts"])
+            path_kinds = dict(state["path_kinds"])
+            kind_by_path = {self._state_key_in(k): v for k, v in state["kind_by_path"].items()}
+            state["queue"] = list(state["queue"])
+            state["failed_urls"] = list(state["failed_urls"])
+            state["files_downloaded"] = int(state["files_downloaded"])
+            state["files_skipped"] = int(state["files_skipped"])
+        except (KeyError, TypeError, ValueError, AttributeError) as e:
+            print(f"Ignoring {path}: damaged ({e!r}); starting fresh", flush=True)
+            return None
+        if timestamp != self.original_timestamp:
+            # The start page had been replaced by the nearest good capture.
+            self.original_timestamp = timestamp
+            self.original_datetime = original_datetime
+        self.config.base_url = base_url
+        self.config.domain = domain
+        self.config.visited_urls.update(visited)
+        self.corrupted_fonts.update(corrupted_fonts)
+        self._path_kinds.update(path_kinds)
+        self._kind_by_path.update(kind_by_path)
+        return state
+
+    def _print_summary(
+        self, title: str, files_downloaded: int, failed_urls: list[str], files_skipped: int, note: str | None = None
+    ):
+        print(f"\n{'=' * 70}", flush=True)
+        print(title, flush=True)
+        print(f"{'=' * 70}", flush=True)
+        print(f"Output directory: {self.config.output_dir}", flush=True)
+        print(f"Files successfully downloaded: {files_downloaded}", flush=True)
+        print(f"Files failed: {len(failed_urls)}", flush=True)
+        print(f"Files skipped (duplicates): {files_skipped}", flush=True)
+        if self.corrupted_fonts:
+            print(f"Corrupted fonts detected and removed: {len(self.corrupted_fonts)}", flush=True)
+        print(f"Total files processed: {files_downloaded + len(failed_urls)}", flush=True)
+        if note:
+            print(note, flush=True)
+        if failed_urls:
+            print("Failed URLs:", flush=True)
+            for failed_url in failed_urls[: self.MAX_FAILED_URLS_SHOWN]:
+                print(f"  {failed_url}", flush=True)
+            if len(failed_urls) > self.MAX_FAILED_URLS_SHOWN:
+                print(f"  ... and {len(failed_urls) - self.MAX_FAILED_URLS_SHOWN} more", flush=True)
+        print(f"{'=' * 70}\n", flush=True)
+
     def download(self):
         """Main download method."""
+        from collections import deque
+
         # Create output directory
         Path(self.config.output_dir).mkdir(parents=True, exist_ok=True)
+        # A run killed outright (SIGKILL, power loss) mid-write leaves its
+        # temporary file behind; the target itself was never touched.
+        for stale in Path(self.config.output_dir).rglob(".wayback-archive-*.part"):
+            stale.unlink(missing_ok=True)
 
-        # Start with the main page
+        # Start with the main page, or where an interrupted run of the same
+        # URL stopped.
         start_url = self.config.base_url
-        queue = [start_url]
+        queue = deque([start_url])
+        files_downloaded = 0
+        failed_urls: list[str] = []
+        # References to a file already fetched or queued.
+        files_skipped = 0
+        state = self._load_state(start_url)
+        if state:
+            queue = deque(state["queue"])
+            files_downloaded = state["files_downloaded"]
+            failed_urls = state["failed_urls"]
+            files_skipped = state["files_skipped"]
+            print(f"Resuming: {files_downloaded + len(failed_urls)} files done, {len(queue)} queued", flush=True)
         # Visited and queued URLs are keyed by the file they are stored as:
         # http/https and www twins, or ?v= cache-busters, are one file and are
         # fetched once, while each Google Fonts family set has its own file.
-        queued_keys = {self._tracking_key(self.config.base_url)}
+        queued_keys = set(self.config.visited_urls) | {self._tracking_key(u) for u in queue}
+        state_path = self._state_path()
 
         def enqueue(link_url: str) -> None:
+            nonlocal files_skipped
             key = self._tracking_key(link_url)
             if key not in self.config.visited_urls and key not in queued_keys:
                 queued_keys.add(key)
                 queue.append(link_url)
+            else:
+                files_skipped += 1
 
-        files_downloaded = 0
-        files_failed = 0
-        files_skipped = 0
         # Requests in a row that Wayback throttled or did not answer. Past
-        # MAX_CONSECUTIVE_REFUSALS the run stops rather than hammer it.
-        consecutive_refusals = 0
+        # MAX_CONSECUTIVE_REFUSALS the run stops rather than hammer it, and
+        # those URLs go back in the queue for the next run.
+        refused: list[tuple[str, str]] = []
         stop_reason = None
+        max_files_note = None
+        # The file being worked on, with the counts from before it, so an
+        # interruption can put it back in the queue.
+        in_flight = None
+        last_saved = len(self.config.visited_urls)
+        # The host before a redirected start page moves the crawl, so an
+        # interruption on that page can put both back.
+        start_host = (self.config.base_url, self.config.domain)
 
         print(f"\n{'=' * 70}", flush=True)
         print("Wayback-Archive Downloader", flush=True)
@@ -2843,385 +3222,413 @@ class WaybackDownloader:
             print(f"⚠️  TEST MODE: Limited to {self.config.max_files} files", flush=True)
         print(f"{'=' * 70}\n", flush=True)
 
-        while queue:
-            # Check if we've reached the file limit (for testing). Failed
-            # attempts count too, or a limited run could make hundreds of
-            # requests past the limit.
-            if self.config.max_files and len(self.config.visited_urls) >= self.config.max_files:
-                print(f"\n{'=' * 70}", flush=True)
-                print(f"⚠️  Reached MAX_FILES limit ({self.config.max_files}) - stopping download", flush=True)
-                print(f"{'=' * 70}", flush=True)
-                break
+        try:
+            while queue:
+                in_flight = None
+                if len(self.config.visited_urls) - last_saved >= self.STATE_SAVE_EVERY:
+                    self._save_state(start_url, queue, files_downloaded, failed_urls, files_skipped)
+                    last_saved = len(self.config.visited_urls)
+                # Check if we've reached the file limit (for testing). Failed
+                # attempts count too, or a limited run could make hundreds of
+                # requests past the limit.
+                if self.config.max_files and len(self.config.visited_urls) >= self.config.max_files:
+                    print(f"\n{'=' * 70}", flush=True)
+                    print(f"⚠️  Reached MAX_FILES limit ({self.config.max_files}) - stopping download", flush=True)
+                    print(f"{'=' * 70}", flush=True)
+                    max_files_note = f"Stopped at MAX_FILES; {len(queue)} queued URLs not fetched"
+                    break
 
-            queue_size = len(queue)
-            url = queue.pop(0)
+                queue_size = len(queue)
+                url = queue.popleft()
 
-            # Skip fragment-only URLs (like #page, #section, etc.)
-            if url.startswith("#"):
-                continue
+                try:
+                    local_path = self._get_local_path(url)
+                    if local_path == state_path:
+                        raise UnsafeOutputPathError("that name holds the resume state")
+                except UnsafeOutputPathError as e:
+                    # Archived content asked us to write outside OUTPUT_DIR. Skip
+                    # this file and keep archiving the rest of the site.
+                    self.config.visited_urls.add(url)
+                    failed_urls.append(url)
+                    print(f"         ⛔ Refused unsafe path for {url}: {e}", flush=True)
+                    continue
+                normalized_for_tracking = str(local_path)
 
-            try:
-                local_path = self._get_local_path(url)
-            except UnsafeOutputPathError as e:
-                # Archived content asked us to write outside OUTPUT_DIR. Skip
-                # this file and keep archiving the rest of the site.
-                files_failed += 1
-                print(f"         ⛔ Refused unsafe path for {url}: {e}", flush=True)
-                continue
-            normalized_for_tracking = str(local_path)
-
-            if normalized_for_tracking in self.config.visited_urls:
-                files_skipped += 1
-                continue
-
-            # Show status
-            file_type = self._get_file_type_from_url(url)
-            current_file_num = len(self.config.visited_urls) + 1
-            limit_info = f" (limit: {self.config.max_files})" if self.config.max_files else ""
-            print(f"[{current_file_num}{limit_info}] Downloading {file_type}: {url}", flush=True)
-            if queue_size > 1:
-                print(f"         Queue: {queue_size - 1} files remaining", flush=True)
-
-            self.config.visited_urls.add(normalized_for_tracking)
-
-            content = self.download_file(url)
-            refusal = self._last_failure
-            if content or not refusal:
-                consecutive_refusals = 0
-            if not content:
-                # Try CDN fallback for critical jQuery files if Wayback fails:
-                # the version the URL names (x.y also as x.y.0), then 3.7.1.
-                # A ?ver= is often WordPress's version, not jQuery's.
-                if "jquery.min.js" in url.lower() and "cdn" not in url.lower():
-                    match = re.search(r"jquery[-./@]?v?(\d+\.\d+(?:\.\d+)?)|[?&]ver=(\d+\.\d+(?:\.\d+)?)", url, re.I)
-                    versions = []
-                    if match:
-                        named = match.group(1) or match.group(2)
-                        versions = [named] + ([named + ".0"] if named.count(".") == 1 else [])
-                    for version in dict.fromkeys(versions + ["3.7.1"]):
-                        if version == "3.7.1" and "3.7.1" not in versions:
-                            print(
-                                "         jQuery version unknown or not on code.jquery.com; substituting 3.7.1",
-                                flush=True,
-                            )
-                        content = self._fetch_from_live_cdn(f"https://code.jquery.com/jquery-{version}.min.js")
-                        if content:
-                            break
-
-                if not content:
-                    files_failed += 1
-                    print("         ⚠️  Failed to download", flush=True)
-                    # Only a file no fallback could save counts as refused.
-                    if refusal:
-                        consecutive_refusals += 1
-                        if consecutive_refusals >= self.MAX_CONSECUTIVE_REFUSALS:
-                            stop_reason = (
-                                f"Stopped: the Wayback Machine refused {consecutive_refusals} requests in a row "
-                                f"(last: {refusal}); try again later"
-                            )
-                            break
+                if normalized_for_tracking in self.config.visited_urls:
                     continue
 
-            if self._is_html_instead_of_asset(content, url):
-                files_failed += 1
-                print("         ⚠️  Failed: got an HTML page instead of the file", flush=True)
-                continue
-            if url == start_url:
-                url = self._follow_start_redirect(url)
-            charset = self._last_charset
+                # Show status
+                file_type = self._get_file_type_from_url(url)
+                current_file_num = len(self.config.visited_urls) + 1
+                limit_info = f" (limit: {self.config.max_files})" if self.config.max_files else ""
+                print(f"[{current_file_num}{limit_info}] Downloading {file_type}: {url}", flush=True)
+                if queue_size > 1:
+                    print(f"         Queue: {queue_size - 1} files remaining", flush=True)
 
-            # Show file size
-            size_kb = len(content) / 1024
-            if size_kb < 1024:
-                print(f"         ✓ Downloaded ({size_kb:.1f} KB)", flush=True)
-            else:
-                print(f"         ✓ Downloaded ({size_kb / 1024:.1f} MB)", flush=True)
+                self.config.visited_urls.add(normalized_for_tracking)
+                in_flight = (url, normalized_for_tracking, files_downloaded, len(failed_urls))
 
-            files_downloaded += 1
+                content = self.download_file(url)
+                refusal = self._last_failure
+                if not content:
+                    # Try CDN fallback for critical jQuery files if Wayback fails:
+                    # the version the URL names (x.y also as x.y.0), then 3.7.1.
+                    # A ?ver= is often WordPress's version, not jQuery's.
+                    if "jquery.min.js" in url.lower() and "cdn" not in url.lower():
+                        match = re.search(
+                            r"jquery[-./@]?v?(\d+\.\d+(?:\.\d+)?)|[?&]ver=(\d+\.\d+(?:\.\d+)?)", url, re.I
+                        )
+                        versions = []
+                        if match:
+                            named = match.group(1) or match.group(2)
+                            versions = [named] + ([named + ".0"] if named.count(".") == 1 else [])
+                        for version in dict.fromkeys(versions + ["3.7.1"]):
+                            if version == "3.7.1" and "3.7.1" not in versions:
+                                print(
+                                    "         jQuery version unknown or not on code.jquery.com; substituting 3.7.1",
+                                    flush=True,
+                                )
+                            content = self._fetch_from_live_cdn(f"https://code.jquery.com/jquery-{version}.min.js")
+                            if content:
+                                break
 
-            # Determine file type with robust detection
-            try:
+                    if not content:
+                        failed_urls.append(url)
+                        print("         ⚠️  Failed to download", flush=True)
+                        # Only a file no fallback could save counts as refused.
+                        if not refusal:
+                            refused.clear()
+                            continue
+                        refused.append((url, normalized_for_tracking))
+                        if len(refused) >= self.MAX_CONSECUTIVE_REFUSALS:
+                            stop_reason = (
+                                f"Stopped: the Wayback Machine refused {len(refused)} requests in a row "
+                                f"(last: {refusal}); try again later"
+                            )
+                            # Refused is not missing: the next run retries them.
+                            for refused_url, refused_key in reversed(refused):
+                                self.config.visited_urls.discard(refused_key)
+                                failed_urls.remove(refused_url)
+                                queue.appendleft(refused_url)
+                            in_flight = None
+                            break
+                        continue
+                # Any answer, or a fallback that saved the file, ends a streak.
+                refused.clear()
+
+                if self._is_html_instead_of_asset(content, url):
+                    failed_urls.append(url)
+                    print("         ⚠️  Failed: got an HTML page instead of the file", flush=True)
+                    continue
+                if url == start_url:
+                    url = self._follow_start_redirect(url)
+                charset = self._last_charset
+
+                # Show file size
+                size_kb = len(content) / 1024
+                if size_kb < 1024:
+                    print(f"         ✓ Downloaded ({size_kb:.1f} KB)", flush=True)
+                else:
+                    print(f"         ✓ Downloaded ({size_kb / 1024:.1f} MB)", flush=True)
+
+                files_downloaded += 1
+
+                # Determine file type with robust detection
                 parsed = urlparse(url)
-                content_type, _ = mimetypes.guess_type(parsed.path)
-                # A server-side page is whatever its script sent (mimetypes
-                # calls .pl text/plain), so let the content decide.
-                if os.path.splitext(parsed.path.lower())[1] in self.PAGE_EXTENSIONS:
+                try:
+                    content_type, _ = mimetypes.guess_type(parsed.path)
+                    # A server-side page is whatever its script sent (mimetypes
+                    # calls .pl text/plain), so let the content decide.
+                    if os.path.splitext(parsed.path.lower())[1] in self.PAGE_EXTENSIONS:
+                        content_type = None
+
+                    # Better content type detection from URL path
+                    # Check for Google Fonts CSS files first (they don't have .css extension)
+                    if self._is_google_fonts_css(url):
+                        content_type = "text/css"
+                    elif not content_type:
+                        path_lower = parsed.path.lower()
+                        # Check for specific extensions
+                        if path_lower.endswith(".css") or "/.css" in path_lower:
+                            content_type = "text/css"
+                        elif path_lower.endswith((".js", ".mjs")) or "/.js" in path_lower:
+                            content_type = "application/javascript"
+                        elif any(path_lower.endswith(ext) for ext in [".woff", ".woff2", ".ttf", ".eot", ".otf"]):
+                            content_type = "font/woff2"  # Font file
+                        elif any(
+                            path_lower.endswith(ext)
+                            for ext in [".jpg", ".jpeg", ".png", ".gif", ".svg", ".webp", ".ico", ".bmp", ".tiff"]
+                        ):
+                            content_type = "image/jpeg"  # Default, will be refined from actual content
+                        elif path_lower.endswith(".json"):
+                            content_type = "application/json"
+                        elif path_lower.endswith(".xml"):
+                            content_type = "application/xml"
+                        elif path_lower.endswith(".pdf"):
+                            content_type = "application/pdf"
+                        elif any(path_lower.endswith(ext) for ext in [".mp4", ".webm", ".ogv"]):
+                            content_type = "video/mp4"
+                        elif any(path_lower.endswith(ext) for ext in [".mp3", ".wav", ".ogg"]):
+                            content_type = "audio/mpeg"
+
+                    # Try to detect from actual content if still unknown
+                    if not content_type and len(content) > 0:
+                        content_stripped = content.lstrip()
+                        if content_stripped.startswith((b"<!DOCTYPE", b"<!doctype", b"<html", b"<HTML")):
+                            content_type = "text/html"
+                        elif content_stripped.startswith((b"/*", b"@charset")) or b"@media" in content[:200]:
+                            content_type = "text/css"
+                        elif content_stripped.startswith(b"<?xml") or b"<svg" in content[:200]:
+                            content_type = "image/svg+xml"
+                        elif content.startswith(b"\x89PNG"):
+                            content_type = "image/png"
+                        elif content.startswith(b"\xff\xd8\xff"):
+                            content_type = "image/jpeg"
+                        elif content.startswith(b"GIF"):
+                            content_type = "image/gif"
+                        elif content.startswith(b"RIFF") and b"WEBP" in content[:12]:
+                            content_type = "image/webp"
+                except Exception as e:
+                    print(f"Warning: Error detecting content type for {url}: {e}")
                     content_type = None
 
-                # Better content type detection from URL path
-                # Check for Google Fonts CSS files first (they don't have .css extension)
-                if self._is_google_fonts_css(url):
-                    content_type = "text/css"
-                elif not content_type:
-                    path_lower = parsed.path.lower()
-                    # Check for specific extensions
-                    if path_lower.endswith(".css") or "/.css" in path_lower:
+                try:
+                    local_path.parent.mkdir(parents=True, exist_ok=True)
+                except OSError as e:
+                    # A name too long for the filesystem, or one already taken by
+                    # a file, costs this file only, not the rest of the run.
+                    files_downloaded -= 1
+                    failed_urls.append(url)
+                    print(f"         ⛔ Cannot store {url}: {e}", flush=True)
+                    continue
+
+                # A URL with no extension tells us nothing about its type, but the
+                # element that referenced it does. Without this an extensionless
+                # stylesheet sniffs as a page and gets rewritten as HTML - saved
+                # under .css but wrapped in <body>, with its @import untouched.
+                if not content_type:
+                    referenced_kind = self._kind_by_path.get(str(local_path))
+                    if referenced_kind == "stylesheet":
                         content_type = "text/css"
-                    elif path_lower.endswith((".js", ".mjs")) or "/.js" in path_lower:
+                    elif referenced_kind == "script":
                         content_type = "application/javascript"
-                    elif any(path_lower.endswith(ext) for ext in [".woff", ".woff2", ".ttf", ".eot", ".otf"]):
-                        content_type = "font/woff2"  # Font file
-                    elif any(
-                        path_lower.endswith(ext)
-                        for ext in [".jpg", ".jpeg", ".png", ".gif", ".svg", ".webp", ".ico", ".bmp", ".tiff"]
-                    ):
-                        content_type = "image/jpeg"  # Default, will be refined from actual content
-                    elif path_lower.endswith(".json"):
-                        content_type = "application/json"
-                    elif path_lower.endswith(".xml"):
-                        content_type = "application/xml"
-                    elif path_lower.endswith(".pdf"):
-                        content_type = "application/pdf"
-                    elif any(path_lower.endswith(ext) for ext in [".mp4", ".webm", ".ogg"]):
-                        content_type = "video/mp4"
-                    elif any(path_lower.endswith(ext) for ext in [".mp3", ".wav", ".ogg"]):
-                        content_type = "audio/mpeg"
 
-                # Try to detect from actual content if still unknown
-                if not content_type and len(content) > 0:
-                    content_stripped = content.lstrip()
-                    if content_stripped.startswith((b"<!DOCTYPE", b"<!doctype", b"<html", b"<HTML")):
-                        content_type = "text/html"
-                    elif content_stripped.startswith((b"/*", b"@charset")) or b"@media" in content[:200]:
-                        content_type = "text/css"
-                    elif content_stripped.startswith(b"<?xml") or b"<svg" in content[:200]:
-                        content_type = "image/svg+xml"
-                    elif content.startswith(b"\x89PNG"):
-                        content_type = "image/png"
-                    elif content.startswith(b"\xff\xd8\xff"):
-                        content_type = "image/jpeg"
-                    elif content.startswith(b"GIF"):
-                        content_type = "image/gif"
-                    elif content.startswith(b"RIFF") and b"WEBP" in content[:12]:
-                        content_type = "image/webp"
-            except Exception as e:
-                print(f"Warning: Error detecting content type for {url}: {e}")
-                content_type = None
+                try:
+                    # Check for Google Fonts CSS files first (they don't have .css extension)
+                    is_google_fonts_css = self._is_google_fonts_css(url)
 
-            try:
-                local_path.parent.mkdir(parents=True, exist_ok=True)
-            except OSError as e:
-                # A name too long for the filesystem, or one already taken by
-                # a file, costs this file only, not the rest of the run.
-                files_downloaded -= 1
-                files_failed += 1
-                print(f"         ⛔ Cannot store {url}: {e}", flush=True)
-                continue
-
-            # A URL with no extension tells us nothing about its type, but the
-            # element that referenced it does. Without this an extensionless
-            # stylesheet sniffs as a page and gets rewritten as HTML - saved
-            # under .css but wrapped in <body>, with its @import untouched.
-            if not content_type:
-                referenced_kind = self._kind_by_path.get(str(local_path))
-                if referenced_kind == "stylesheet":
-                    content_type = "text/css"
-                elif referenced_kind == "script":
-                    content_type = "application/javascript"
-
-            try:
-                # Check for Google Fonts CSS files first (they don't have .css extension)
-                is_google_fonts_css = self._is_google_fonts_css(url)
-
-                # Process based on content type - be more conservative about what we treat as HTML
-                # A script can answer with a PDF, JSON or CSV, so a server-side
-                # URL is a page only when its body is markup.
-                is_html = not is_google_fonts_css and (
-                    content_type == "text/html"
-                    or (
-                        not content_type
-                        and self._is_html_url(url, parsed)
-                        and (
-                            os.path.splitext(parsed.path.lower())[1] not in self.PAGE_EXTENSIONS
-                            or self._looks_like_markup(content)
+                    # Process based on content type - be more conservative about what we treat as HTML
+                    # A script can answer with a PDF, JSON or CSV, so a server-side
+                    # URL is a page only when its body is markup.
+                    is_html = not is_google_fonts_css and (
+                        content_type == "text/html"
+                        or (
+                            not content_type
+                            and self._is_html_url(url, parsed)
+                            and (
+                                os.path.splitext(parsed.path.lower())[1] not in self.PAGE_EXTENSIONS
+                                or self._looks_like_markup(content)
+                            )
                         )
                     )
-                )
 
-                if is_html:
-                    # Process HTML
-                    try:
-                        print("         Processing HTML and extracting links...", flush=True)
-                        # Saved as UTF-8; bs4 rewrites the <meta charset> to match.
-                        html = self._decode_text(content, charset, is_html=True)
-
-                        processed_html, new_links = self._process_html(html, url)
-                        if new_links:
-                            print(f"         Found {len(new_links)} new links to download", flush=True)
-                    except Exception as e:
-                        print(f"Error processing HTML for {url}: {e}")
-                        import traceback
-
-                        traceback.print_exc()
-                        # Still save the raw HTML if processing fails
+                    if is_html:
+                        # Process HTML
                         try:
-                            with open(local_path, "wb") as f:
-                                f.write(content)
-                            self.config.downloaded_files[url] = str(local_path)
-                        except Exception as save_error:
+                            print("         Processing HTML and extracting links...", flush=True)
+                            # Saved as UTF-8; bs4 rewrites the <meta charset> to match.
+                            html = self._decode_text(content, charset, is_html=True)
+
+                            processed_html, new_links = self._process_html(html, url)
+                            if new_links:
+                                print(f"         Found {len(new_links)} new links to download", flush=True)
+                        except Exception as e:
+                            print(f"Error processing HTML for {url}: {e}")
+                            import traceback
+
+                            traceback.print_exc()
+                            # The raw HTML is still saved, but its links are
+                            # neither rewritten nor followed: the page failed.
                             files_downloaded -= 1
-                            files_failed += 1
-                            print(f"Error saving file {local_path}: {save_error}")
-                        continue
+                            failed_urls.append(url)
+                            try:
+                                self._write_file(local_path, content)
+                                self.config.downloaded_files[url] = str(local_path)
+                            except Exception as save_error:
+                                print(f"Error saving file {local_path}: {save_error}")
+                            continue
 
-                    # Save HTML
-                    try:
-                        with open(local_path, "w", encoding="utf-8", errors="replace") as f:
-                            f.write(processed_html)
-                        self.config.downloaded_files[url] = str(local_path)
-                    except Exception as e:
-                        files_downloaded -= 1
-                        files_failed += 1
-                        print(f"Error saving HTML to {local_path}: {e}")
-                        continue
-
-                    for link_url in new_links:
-                        enqueue(link_url)
-
-                elif content_type == "text/css":
-                    # Process CSS. It is saved as UTF-8, so its @charset has
-                    # to say so or the browser decodes it the old way.
-                    css = re.sub(
-                        r'^\s*@charset\s+["\'][^"\']*["\']\s*;',
-                        '@charset "utf-8";',
-                        self._decode_text(content, charset),
-                        count=1,
-                        flags=re.IGNORECASE,
-                    )
-                    original_css = css
-
-                    try:
-                        print("         Processing CSS and extracting resources...", flush=True)
-                        # Extract URLs from CSS (images, fonts, @import, etc.)
-                        css_urls = self._extract_css_urls(css, url)
-                        if css_urls:
-                            print(f"         Found {len(css_urls)} resources in CSS", flush=True)
-                        for css_url in css_urls:
-                            # Handle fonts.gstatic.com URLs - these are external but available on Wayback Machine
-                            # They need to be downloaded to avoid CORS issues
-                            is_google_font = _host_matches(css_url, self.GOOGLE_FONT_HOSTS)
-                            is_squarespace_cdn = self._is_squarespace_cdn(css_url)
-                            if self._is_internal_url(css_url) or is_google_font or is_squarespace_cdn:
-                                queue_length = len(queue)
-                                enqueue(css_url)
-                                if is_google_font and len(queue) > queue_length:
-                                    print(
-                                        f"         📥 Queued Google Font file for download: {css_url[:80]}...",
-                                        flush=True,
-                                    )
-
-                        # Check font URLs in CSS and detect corrupted ones proactively,
-                        # while the CSS still names the real URLs. This ensures we
-                        # catch corrupted fonts even if they haven't been downloaded yet
-                        css = self._check_and_remove_corrupted_fonts_in_css(css, url)
-
-                        # Rewrite URLs in CSS to relative paths. A stylesheet's
-                        # url() references resolve against the stylesheet's own
-                        # location, so make that the current page for the
-                        # rewrite - otherwise every link is computed from
-                        # whichever HTML page happened to be processed last.
-                        previous_page_url = getattr(self, "_current_page_url", None)
-                        self._current_page_url = url
+                        # Save HTML
                         try:
-                            css = self._rewrite_css_urls(css, url)
-                        finally:
-                            self._current_page_url = previous_page_url
+                            self._write_file(local_path, processed_html, "utf-8")
+                            self.config.downloaded_files[url] = str(local_path)
+                        except Exception as e:
+                            files_downloaded -= 1
+                            failed_urls.append(url)
+                            print(f"Error saving HTML to {local_path}: {e}")
+                            continue
 
-                        # Remove references to already-detected corrupted fonts
-                        css = self._remove_corrupted_fonts_from_css(css)
+                        for link_url in new_links:
+                            enqueue(link_url)
 
-                        # Proactively remove .eot and .svg font format references
-                        # These are often corrupted (HTML error pages) and modern browsers don't need them
-                        # Browsers will use .woff2, .woff, and .ttf which are more reliable
-                        css = self._remove_legacy_font_formats_from_css(css)
+                    elif content_type == "text/css":
+                        # Process CSS. It is saved as UTF-8, so its @charset has
+                        # to say so or the browser decodes it the old way.
+                        css = re.sub(
+                            r'^\s*@charset\s+["\'][^"\']*["\']\s*;',
+                            '@charset "utf-8";',
+                            self._decode_text(content, charset),
+                            count=1,
+                            flags=re.IGNORECASE,
+                        )
+                        original_css = css
 
-                        css = self._minify_css(css)
-                    except Exception as e:
-                        print(f"Warning: Error processing CSS for {url}: {e}")
-                        # Use original content if processing fails
-                        css = original_css
+                        try:
+                            print("         Processing CSS and extracting resources...", flush=True)
+                            # Extract URLs from CSS (images, fonts, @import, etc.)
+                            css_urls = self._extract_css_urls(css, url)
+                            if css_urls:
+                                print(f"         Found {len(css_urls)} resources in CSS", flush=True)
+                            for css_url in css_urls:
+                                # Handle fonts.gstatic.com URLs - these are external but available on Wayback Machine
+                                # They need to be downloaded to avoid CORS issues
+                                is_google_font = _host_matches(css_url, self.GOOGLE_FONT_HOSTS)
+                                is_squarespace_cdn = self._is_squarespace_cdn(css_url)
+                                if self._is_internal_url(css_url) or is_google_font or is_squarespace_cdn:
+                                    queue_length = len(queue)
+                                    enqueue(css_url)
+                                    if is_google_font and len(queue) > queue_length:
+                                        print(
+                                            f"         📥 Queued Google Font file for download: {css_url[:80]}...",
+                                            flush=True,
+                                        )
 
-                    try:
-                        with open(local_path, "w", encoding="utf-8", errors="replace") as f:
-                            f.write(css)
+                            # Check font URLs in CSS and detect corrupted ones proactively,
+                            # while the CSS still names the real URLs. This ensures we
+                            # catch corrupted fonts even if they haven't been downloaded yet
+                            css = self._check_and_remove_corrupted_fonts_in_css(css, url)
+
+                            # Rewrite URLs in CSS to relative paths. A stylesheet's
+                            # url() references resolve against the stylesheet's own
+                            # location, so make that the current page for the
+                            # rewrite - otherwise every link is computed from
+                            # whichever HTML page happened to be processed last.
+                            previous_page_url = getattr(self, "_current_page_url", None)
+                            self._current_page_url = url
+                            try:
+                                css = self._rewrite_css_urls(css, url)
+                            finally:
+                                self._current_page_url = previous_page_url
+
+                            # Remove references to already-detected corrupted fonts
+                            css = self._remove_corrupted_fonts_from_css(css, url)
+
+                            # Proactively remove .eot and .svg font format references
+                            # These are often corrupted (HTML error pages) and modern browsers don't need them
+                            # Browsers will use .woff2, .woff, and .ttf which are more reliable
+                            css = self._remove_legacy_font_formats_from_css(css)
+
+                            css = self._minify_css(css)
+                        except Exception as e:
+                            print(f"Warning: Error processing CSS for {url}: {e}")
+                            # Use original content if processing fails
+                            css = original_css
+
+                        try:
+                            self._write_file(local_path, css, "utf-8")
+                            self.config.downloaded_files[url] = str(local_path)
+                        except Exception as e:
+                            files_downloaded -= 1
+                            failed_urls.append(url)
+                            print(f"Error saving CSS to {local_path}: {e}")
+                            continue
+
+                    elif content_type in ("application/javascript", "text/javascript"):
+                        # Process JavaScript
+                        js = self._decode_text(content, charset)
+
+                        print("         Processing JavaScript and extracting URLs...", flush=True)
+                        # Extract URLs from JavaScript (may contain fetch, XMLHttpRequest, etc.)
+                        js_urls = self._extract_js_urls(js, url)
+                        if js_urls:
+                            print(f"         Found {len(js_urls)} URLs in JavaScript", flush=True)
+                        for js_url in js_urls:
+                            if self._is_internal_url(js_url):
+                                enqueue(js_url)
+
+                        js = self._minify_js(js)
+
+                        self._write_file(local_path, js, "utf-8")
+
                         self.config.downloaded_files[url] = str(local_path)
-                    except Exception as e:
-                        files_downloaded -= 1
-                        files_failed += 1
-                        print(f"Error saving CSS to {local_path}: {e}")
-                        continue
 
-                elif content_type in ("application/javascript", "text/javascript"):
-                    # Process JavaScript
-                    js = self._decode_text(content, charset)
+                    elif content_type and content_type.startswith("image/"):
+                        # Process images
+                        format_map = {
+                            "image/jpeg": "JPEG",
+                            "image/png": "PNG",
+                            "image/gif": "GIF",
+                            "image/webp": "WEBP",
+                        }
+                        img_format = format_map.get(content_type)
+                        # Anything else (.ico, .svg, .bmp) is written as it came.
+                        optimized = self._optimize_image(content, img_format) if img_format else content
 
-                    print("         Processing JavaScript and extracting URLs...", flush=True)
-                    # Extract URLs from JavaScript (may contain fetch, XMLHttpRequest, etc.)
-                    js_urls = self._extract_js_urls(js, url)
-                    if js_urls:
-                        print(f"         Found {len(js_urls)} URLs in JavaScript", flush=True)
-                    for js_url in js_urls:
-                        if self._is_internal_url(js_url):
-                            enqueue(js_url)
+                        self._write_file(local_path, optimized)
 
-                    js = self._minify_js(js)
+                        self.config.downloaded_files[url] = str(local_path)
 
-                    with open(local_path, "w", encoding="utf-8") as f:
-                        f.write(js)
+                    elif content_type and content_type.startswith("font/"):
+                        # Save font files as-is
+                        self._write_file(local_path, content)
+                        self.config.downloaded_files[url] = str(local_path)
 
-                    self.config.downloaded_files[url] = str(local_path)
+                    else:
+                        # Save as-is
+                        self._write_file(local_path, content)
 
-                elif content_type and content_type.startswith("image/"):
-                    # Process images
-                    format_map = {
-                        "image/jpeg": "JPEG",
-                        "image/png": "PNG",
-                        "image/gif": "GIF",
-                        "image/webp": "WEBP",
-                    }
-                    img_format = format_map.get(content_type)
-                    # Anything else (.ico, .svg, .bmp) is written as it came.
-                    optimized = self._optimize_image(content, img_format) if img_format else content
+                        self.config.downloaded_files[url] = str(local_path)
+                except Exception as e:
+                    # One file that cannot be processed or written fails alone.
+                    files_downloaded -= 1
+                    failed_urls.append(url)
+                    print(f"Error processing {url}: {e}")
+                    continue
+            in_flight = None
+        except BaseException as error:
+            # Ctrl-C or an unexpected error: the file being worked on goes
+            # back in the queue and the state is saved for the next run.
+            if in_flight:
+                url, key, files_downloaded, failed_count = in_flight
+                del failed_urls[failed_count:]
+                self.config.visited_urls.discard(key)
+                queue.appendleft(url)
+                if url == start_url:
+                    self.config.base_url, self.config.domain = start_host
+            try:
+                self._save_state(start_url, queue, files_downloaded, failed_urls, files_skipped)
+            except OSError as e:
+                print(f"Could not save the resume state: {e}", flush=True)
+            if isinstance(error, KeyboardInterrupt):
+                self._print_summary("Download interrupted", files_downloaded, failed_urls, files_skipped)
+            raise
 
-                    with open(local_path, "wb") as f:
-                        f.write(optimized)
-
-                    self.config.downloaded_files[url] = str(local_path)
-
-                elif content_type and content_type.startswith("font/"):
-                    # Save font files as-is
-                    with open(local_path, "wb") as f:
-                        f.write(content)
-                    self.config.downloaded_files[url] = str(local_path)
-
-                else:
-                    # Save as-is
-                    with open(local_path, "wb") as f:
-                        f.write(content)
-
-                    self.config.downloaded_files[url] = str(local_path)
-            except Exception as e:
-                # One file that cannot be processed or written fails alone.
-                files_downloaded -= 1
-                files_failed += 1
-                print(f"Error processing {url}: {e}")
-                continue
+        if stop_reason or max_files_note:
+            self._save_state(start_url, queue, files_downloaded, failed_urls, files_skipped)
+        else:
+            state_path.unlink(missing_ok=True)
 
         if files_downloaded == 0 and not stop_reason:
             # The start page failed, so nothing else was found. Say so rather
             # than report an empty archive as complete.
+            if self.config.downloaded_files:
+                raise RuntimeError(
+                    f"The start page of {self.config.base_url} was saved raw but could not be processed, "
+                    "so no links were followed"
+                )
             raise RuntimeError(f"Nothing was saved: no usable capture of {self.config.base_url} could be downloaded")
 
-        print(f"\n{'=' * 70}", flush=True)
-        print("Download stopped early" if stop_reason else "Download Complete!", flush=True)
-        print(f"{'=' * 70}", flush=True)
-        print(f"Output directory: {self.config.output_dir}", flush=True)
-        print(f"Files successfully downloaded: {files_downloaded}", flush=True)
-        print(f"Files failed: {files_failed}", flush=True)
-        print(f"Files skipped (duplicates): {files_skipped}", flush=True)
-        if self.corrupted_fonts:
-            print(f"Corrupted fonts detected and removed: {len(self.corrupted_fonts)}", flush=True)
-        print(f"Total files processed: {len(self.config.visited_urls)}", flush=True)
-        print(f"{'=' * 70}\n", flush=True)
+        title = "Download stopped early" if stop_reason else "Download Complete!"
+        self._print_summary(title, files_downloaded, failed_urls, files_skipped, max_files_note)
         if stop_reason:
             raise RuntimeError(stop_reason)

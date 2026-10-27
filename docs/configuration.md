@@ -26,10 +26,10 @@ Each on/off option has a pair of flags: `--minify-css` turns it on and `--no-min
 
 | Flag | Environment variable | Default | What it does |
 |---|---|---|---|
-| `--optimize-html` | `OPTIMIZE_HTML` | `true` | Minify HTML |
+| `--optimize-html` | `OPTIMIZE_HTML` | `false` | Minify HTML with `minify-html`. Off by default because it changes how pages render: it drops the space between inline elements such as `<span>a</span> <span>b</span>` and collapses text styled `white-space: pre`. It also removes HTML comments |
 | `--optimize-images` | `OPTIMIZE_IMAGES` | `false` | Recompress still images in their own format; animated images are left as they are |
 | `--minify-js` | `MINIFY_JS` | `false` | Minify JavaScript |
-| `--minify-css` | `MINIFY_CSS` | `false` | Minify CSS |
+| `--minify-css` | `MINIFY_CSS` | `false` | Minify CSS with `rcssmin`, which keeps `calc()` and `@supports` valid |
 
 ## Content Removal
 

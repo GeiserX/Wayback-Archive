@@ -159,7 +159,8 @@ class TestWwwIsAPrefixNotACharacterSet:
         }
         calls, out = _archive(dl, pages)
         assert sorted(calls) == sorted(pages)
-        assert "Files skipped (duplicates): 0" in out
+        # Each later link to a known page is a duplicate: 1 on the home page, 3 on each other.
+        assert "Files skipped (duplicates): 7" in out
 
 
 class TestCssOnlyQueuesRealGoogleFonts:
@@ -323,7 +324,7 @@ GLYPHICONS = (
 
 class TestFontCleanupKeepsTheRestOfTheCss:
     def test_legacy_removal_does_not_cross_rules(self):
-        css = ".a{background:url(a.png)}.b{color:red}@font-face{font-family:F;src:url(f.eot)}"
+        css = ".a{background:url(a.png)}.b{color:red}@font-face{font-family:F;src:url(f.eot),url(f.woff)}"
         result = _make_downloader()._remove_legacy_font_formats_from_css(css)
         assert "url(a.png)" in result
         assert ".b{color:red}" in result
