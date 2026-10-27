@@ -239,3 +239,75 @@ class TestWriteFile:
         dl = _make_downloader(tmp_path)
         dl._write_file(tmp_path / "a.css", "é", "utf-8")
         assert (tmp_path / "a.css").read_bytes() == "é".encode()
+
+    def test_a_killed_run_leaves_no_partial_file_behind_the_next_run(self, tmp_path):
+        out_dir = tmp_path / "out"
+        (out_dir / "sub").mkdir(parents=True)
+        (out_dir / ".wayback-archive-99999.part").write_bytes(b"half")
+        (out_dir / "sub" / ".wayback-archive-99999.part").write_bytes(b"half")
+        _run(_make_downloader(out_dir), _site(1))
+        assert not list(out_dir.rglob("*.part"))
+
+
+class TestRedirectedStart:
+    OLD = "http://old.com"
+    OLD_WAYBACK = "https://web.archive.org/web/20200101000000/http://old.com/"
+    PAGE = b'<html><body><a href="/a.html">a</a></body></html>'
+
+    def _serve(self, dl, calls, interrupt_in_process=False):
+        def fake_download_file(url):
+            calls.append(url)
+            dl._last_failure = None
+            redirected = url == self.OLD + "/"
+            dl._last_final_url = "https://web.archive.org/web/20200101000000/http://new.com/" if redirected else None
+            return self.PAGE
+
+        dl.download_file = fake_download_file
+        if interrupt_in_process:
+
+            def interrupt(html, base_url):
+                raise KeyboardInterrupt
+
+            dl._process_html = interrupt
+
+    def test_interrupt_on_a_redirected_start_page_resumes_on_the_new_host(self, tmp_path):
+        out_dir = tmp_path / "out"
+        dl = _make_downloader(out_dir, wayback_url=self.OLD_WAYBACK)
+        self._serve(dl, [], interrupt_in_process=True)
+        with pytest.raises(KeyboardInterrupt), contextlib.redirect_stdout(io.StringIO()):
+            dl.download()
+        assert _state(out_dir)["domain"] == "old.com"
+
+        calls = []
+        dl = _make_downloader(out_dir, wayback_url=self.OLD_WAYBACK)
+        self._serve(dl, calls)
+        with contextlib.redirect_stdout(io.StringIO()):
+            dl.download()
+        assert calls == [self.OLD + "/", "http://new.com/a.html"]
+
+
+class TestDamagedState:
+    def test_a_state_missing_a_field_is_ignored(self, tmp_path):
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        (out_dir / WaybackDownloader.STATE_FILE).write_text(
+            json.dumps({"version": 1, "complete": False, "start_url": SITE + "/", "wayback_url": WAYBACK_URL})
+        )
+        calls, out = _run(_make_downloader(out_dir), _site(1))
+        assert "starting fresh" in out
+        assert calls == [SITE + "/", SITE + "/p0.html"]
+
+
+class TestStartPageNotProcessed:
+    def test_a_raw_saved_start_page_is_not_called_unsaved(self, tmp_path):
+        out_dir = tmp_path / "out"
+        dl = _make_downloader(out_dir)
+
+        def broken(html, base_url):
+            raise ValueError("broken")
+
+        dl._process_html = broken
+        with pytest.raises(RuntimeError, match="saved raw but could not be processed") as error:
+            _run(dl, _site(1))
+        assert "Nothing was saved" not in str(error.value)
+        assert (out_dir / "index.html").exists()

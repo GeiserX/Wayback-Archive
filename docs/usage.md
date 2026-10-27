@@ -64,10 +64,10 @@ The same applies when a run stops early for other reasons:
 - **Throttling.** When the Wayback Machine refuses 5 requests in a row, the run stops, and the next one retries those 5 files before the rest of the queue.
 - **`MAX_FILES`.** The summary says how many queued URLs were not fetched (`Stopped at MAX_FILES; 87 queued URLs not fetched`). Running again with a higher `MAX_FILES`, or without it, continues the same crawl.
 
-Every file is written to a temporary name first and renamed into place once complete, so a run killed mid-write never leaves a truncated file behind.
+Every file is written to a temporary name first and renamed into place once complete, so a run killed mid-write never leaves a truncated file behind; a temporary file left by a run killed outright is removed when the next run starts.
 
 The summary at the end lists the URLs that failed, up to 50, so what is missing from the copy is visible without scrolling back through the log.
 
 ## Exit status
 
-The command exits with status 1 and a one-line `Error:` message when `WAYBACK_URL` is missing or is not a Wayback Machine URL, when `MAX_FILES` is not a positive whole number, when nothing could be saved because the start page has no usable capture, or when the Wayback Machine refused 5 requests in a row (throttling with HTTP 429 or not answering), in which case the files saved so far stay in place and a later run resumes, retrying the refused files first. A 429 is first retried up to three times, waiting as long as its `Retry-After` header asks, up to 30 seconds. Ctrl-C stops the run with status 130 and keeps what was saved. Otherwise a run that saves the start page exits 0, even if some assets failed or `MAX_FILES` stopped it.
+The command exits with status 1 and a one-line `Error:` message when `WAYBACK_URL` is missing or is not a Wayback Machine URL, when `MAX_FILES` is not a positive whole number, when nothing could be saved because the start page has no usable capture, when the start page was saved raw but could not be processed (so no links were followed), or when the Wayback Machine refused 5 requests in a row (throttling with HTTP 429 or not answering), in which case the files saved so far stay in place and a later run resumes, retrying the refused files first. A 429 is first retried up to three times, waiting as long as its `Retry-After` header asks, up to 30 seconds. Ctrl-C stops the run with status 1 and keeps what was saved. Otherwise a run that saves the start page exits 0, even if some assets failed or `MAX_FILES` stopped it.

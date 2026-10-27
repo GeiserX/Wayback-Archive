@@ -1840,8 +1840,8 @@ class TestContentTypeDetection:
         content = b"<html><body>Test</body></html>"
         dl.download_file = Mock(return_value=content)
         dl._process_html = Mock(side_effect=Exception("parse error"))
-        # The page counts as failed, so the run saved nothing usable.
-        with pytest.raises(RuntimeError, match="Nothing was saved"):
+        # The page counts as failed: saved raw, no links followed.
+        with pytest.raises(RuntimeError, match="saved raw but could not be processed"):
             dl.download()
         assert (tmp_path / "index.html").read_bytes() == content
 

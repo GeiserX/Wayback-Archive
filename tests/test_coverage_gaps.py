@@ -947,7 +947,7 @@ class TestDownloadProcessingErrors:
         dl.download_file = Mock(return_value=b"<html><body>Test</body></html>")
         dl._process_html = Mock(side_effect=Exception("parse error"))
         # The raw page is saved, but it counts as failed
-        with pytest.raises(RuntimeError, match="Nothing was saved"):
+        with pytest.raises(RuntimeError, match="saved raw but could not be processed"):
             dl.download()
         assert (tmp_path / "index.html").exists()
 

@@ -2647,17 +2647,33 @@ class WaybackDownloader:
         if state.get("start_url") != start_url or state.get("wayback_url") != self.config.wayback_url:
             print(f"Ignoring {path}: it belongs to a run of {state.get('wayback_url')}; starting fresh", flush=True)
             return None
-        timestamp = state["original_timestamp"]
+        # Read every field before changing anything, so a damaged file is
+        # ignored as a whole rather than half applied.
+        try:
+            timestamp = state["original_timestamp"]
+            original_datetime = datetime.strptime(timestamp, "%Y%m%d%H%M%S")
+            base_url, domain = str(state["base_url"]), str(state["domain"])
+            visited = [self._state_key_in(k) for k in state["visited"]]
+            corrupted_fonts = list(state["corrupted_fonts"])
+            path_kinds = dict(state["path_kinds"])
+            kind_by_path = {self._state_key_in(k): v for k, v in state["kind_by_path"].items()}
+            state["queue"] = list(state["queue"])
+            state["failed_urls"] = list(state["failed_urls"])
+            state["files_downloaded"] = int(state["files_downloaded"])
+            state["files_skipped"] = int(state["files_skipped"])
+        except (KeyError, TypeError, ValueError, AttributeError) as e:
+            print(f"Ignoring {path}: damaged ({e!r}); starting fresh", flush=True)
+            return None
         if timestamp != self.original_timestamp:
             # The start page had been replaced by the nearest good capture.
             self.original_timestamp = timestamp
-            self.original_datetime = datetime.strptime(timestamp, "%Y%m%d%H%M%S")
-        self.config.base_url = state["base_url"]
-        self.config.domain = state["domain"]
-        self.config.visited_urls.update(self._state_key_in(k) for k in state["visited"])
-        self.corrupted_fonts.update(state["corrupted_fonts"])
-        self._path_kinds.update(state["path_kinds"])
-        self._kind_by_path.update({self._state_key_in(k): v for k, v in state["kind_by_path"].items()})
+            self.original_datetime = original_datetime
+        self.config.base_url = base_url
+        self.config.domain = domain
+        self.config.visited_urls.update(visited)
+        self.corrupted_fonts.update(corrupted_fonts)
+        self._path_kinds.update(path_kinds)
+        self._kind_by_path.update(kind_by_path)
         return state
 
     def _print_summary(
@@ -2689,6 +2705,10 @@ class WaybackDownloader:
 
         # Create output directory
         Path(self.config.output_dir).mkdir(parents=True, exist_ok=True)
+        # A run killed outright (SIGKILL, power loss) mid-write leaves its
+        # temporary file behind; the target itself was never touched.
+        for stale in Path(self.config.output_dir).rglob(".wayback-archive-*.part"):
+            stale.unlink(missing_ok=True)
 
         # Start with the main page, or where an interrupted run of the same
         # URL stopped.
@@ -2730,6 +2750,9 @@ class WaybackDownloader:
         # interruption can put it back in the queue.
         in_flight = None
         last_saved = len(self.config.visited_urls)
+        # The host before a redirected start page moves the crawl, so an
+        # interruption on that page can put both back.
+        start_host = (self.config.base_url, self.config.domain)
 
         print(f"\n{'=' * 70}", flush=True)
         print("Wayback-Archive Downloader", flush=True)
@@ -3121,6 +3144,8 @@ class WaybackDownloader:
                 del failed_urls[failed_count:]
                 self.config.visited_urls.discard(key)
                 queue.appendleft(url)
+                if url == start_url:
+                    self.config.base_url, self.config.domain = start_host
             try:
                 self._save_state(start_url, queue, files_downloaded, failed_urls, files_skipped)
             except OSError as e:
@@ -3137,6 +3162,11 @@ class WaybackDownloader:
         if files_downloaded == 0 and not stop_reason:
             # The start page failed, so nothing else was found. Say so rather
             # than report an empty archive as complete.
+            if self.config.downloaded_files:
+                raise RuntimeError(
+                    f"The start page of {self.config.base_url} was saved raw but could not be processed, "
+                    "so no links were followed"
+                )
             raise RuntimeError(f"Nothing was saved: no usable capture of {self.config.base_url} could be downloaded")
 
         title = "Download stopped early" if stop_reason else "Download Complete!"
