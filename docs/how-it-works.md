@@ -22,6 +22,18 @@ The one exception is a short list of well-known CDN hosts. When the Wayback Mach
 
 A host matches only exactly or as a subdomain (`assets.sqspcdn.com`), never by containing the name (`sqspcdn.com.example.net`, `sqspcdn.com@10.0.0.1`). Anything else the Wayback Machine does not have is reported as failed.
 
+## Where files go
+
+Each URL is stored at its path under the output directory, and every link in the copy points at that same file, relative to the page that holds it, so the copy opens straight from disk.
+
+- A path ending in `/` is stored as `index.html` inside that directory. A path with no extension gets `.html` (`.css` or `.js` when it was referenced as a stylesheet or script), and a server-side page keeps its extension with `.html` added: `/about` becomes `about.html`, `/index.php` becomes `index.php.html`.
+- The fragment (`#section`) never changes the file. The query string does, unless every key in it is a cache-buster (`v`, `ver`, `version`, `rev`, `r`, `t`, `ts`, `_`, `cb`, `cache`, `nocache`, `hash`, `h`, `build`, `timestamp`, `cachebuster`): `style.css?ver=5` is `style.css`, while `/page?id=1` and `/page?id=2` are two pages, stored as `page__q<hash>.html` with a different 10-character hash each. The hash covers the query's other keys and values, sorted, so `?a=1&b=2` and `?b=2&a=1` are one file. The suffix goes before the extension: `/index.php?id=3` becomes `index__q<hash>.php.html`, `/thumb.png?w=200` becomes `thumb__q<hash>.png`.
+- A Google Fonts stylesheet is stored as `fonts.googleapis.com/css-<hash>.css`, one file per family set. Files from Google Fonts and the Squarespace CDN are stored under a folder named after their host.
+- Names are made valid on Windows, macOS and Linux alike, on every OS, so a copy made on one can be moved to another: the characters `<>:"|?*` and control characters become `_`, trailing dots and spaces are removed, and a name Windows reserves (`CON`, `PRN`, `AUX`, `NUL`, `COM1` to `COM9`, `LPT1` to `LPT9`, with or without an extension) gets `_` after it (`nul.txt` becomes `nul_.txt`).
+- A name longer than 200 bytes keeps its first part and its extension, with `~` and 8 characters of a hash of the full name in between, so two long names that share a beginning stay apart.
+- `.` and `..` segments are resolved the way a web server does, so no URL can write outside the output directory.
+- Names keep their case. Two URLs that differ only in case (`/Photo.jpg`, `/photo.jpg`) are one file on a case-insensitive filesystem (the macOS and Windows defaults), and the one saved last wins.
+
 ## Project structure
 
 ```
