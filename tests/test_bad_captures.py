@@ -83,7 +83,7 @@ class TestInterrupt:
             try:
                 return next(answers)
             except StopIteration:
-                raise KeyboardInterrupt
+                raise KeyboardInterrupt from None
 
         dl.session.get = _Recorder(handler)
         with pytest.raises(KeyboardInterrupt):
@@ -162,10 +162,12 @@ class TestBadCapture:
 
     def test_archived_403_falls_back_to_the_nearest_good_capture(self):
         dl = _make_downloader()
-        dl.session.get = _Recorder(_BadCaptureWayback(
-            _Response(403, CHALLENGE, headers=ARCHIVED),
-            lambda kwargs: _cdx_rows("20191231230000"),
-        ))
+        dl.session.get = _Recorder(
+            _BadCaptureWayback(
+                _Response(403, CHALLENGE, headers=ARCHIVED),
+                lambda kwargs: _cdx_rows("20191231230000"),
+            )
+        )
         assert dl.download_file("http://example.com/about") == GOOD_PAGE
         cdx = _cdx_calls(dl)
         assert len(cdx) == 1
@@ -173,17 +175,17 @@ class TestBadCapture:
         assert params["url"] == "http://example.com/about"
         assert params["filter"] == "statuscode:200"
         assert params["closest"] == TS
-        assert dl.session.get.calls[-1][0] == (
-            "https://web.archive.org/web/20191231230000if_/http://example.com/about"
-        )
+        assert dl.session.get.calls[-1][0] == ("https://web.archive.org/web/20191231230000if_/http://example.com/about")
 
     def test_archived_500_asset_falls_back_too(self):
         dl = _make_downloader()
-        dl.session.get = _Recorder(_BadCaptureWayback(
-            _Response(500, b"oops", headers=ARCHIVED),
-            lambda kwargs: _cdx_rows("20191231230000"),
-            good=b"PNGDATA",
-        ))
+        dl.session.get = _Recorder(
+            _BadCaptureWayback(
+                _Response(500, b"oops", headers=ARCHIVED),
+                lambda kwargs: _cdx_rows("20191231230000"),
+                good=b"PNGDATA",
+            )
+        )
         assert dl.download_file("http://example.com/logo.png") == b"PNGDATA"
         assert dl.session.get.calls[-1][0] == (
             "https://web.archive.org/web/20191231230000im_/http://example.com/logo.png"
@@ -191,29 +193,35 @@ class TestBadCapture:
 
     def test_start_url_adopts_the_timestamp_actually_used(self):
         dl = _make_downloader()
-        dl.session.get = _Recorder(_BadCaptureWayback(
-            _Response(503, CHALLENGE, headers=ARCHIVED),
-            lambda kwargs: _cdx_rows("20191231230000"),
-        ))
+        dl.session.get = _Recorder(
+            _BadCaptureWayback(
+                _Response(503, CHALLENGE, headers=ARCHIVED),
+                lambda kwargs: _cdx_rows("20191231230000"),
+            )
+        )
         assert dl.download_file(dl.config.base_url) == GOOD_PAGE
         assert dl.original_timestamp == "20191231230000"
         assert dl.original_datetime.strftime("%Y%m%d%H%M%S") == "20191231230000"
 
     def test_other_urls_keep_the_requested_timestamp(self):
         dl = _make_downloader()
-        dl.session.get = _Recorder(_BadCaptureWayback(
-            _Response(503, CHALLENGE, headers=ARCHIVED),
-            lambda kwargs: _cdx_rows("20191231230000"),
-        ))
+        dl.session.get = _Recorder(
+            _BadCaptureWayback(
+                _Response(503, CHALLENGE, headers=ARCHIVED),
+                lambda kwargs: _cdx_rows("20191231230000"),
+            )
+        )
         dl.download_file("http://example.com/about")
         assert dl.original_timestamp == TS
 
     def test_challenge_archived_as_200_falls_back(self):
         dl = _make_downloader()
-        dl.session.get = _Recorder(_BadCaptureWayback(
-            _Response(200, CHALLENGE),
-            lambda kwargs: _cdx_rows("20191231230000"),
-        ))
+        dl.session.get = _Recorder(
+            _BadCaptureWayback(
+                _Response(200, CHALLENGE),
+                lambda kwargs: _cdx_rows("20191231230000"),
+            )
+        )
         assert dl.download_file("http://example.com/about") == GOOD_PAGE
         assert len(_cdx_calls(dl)) == 1
 
@@ -221,15 +229,15 @@ class TestBadCapture:
         """A challenge archived with status 200 passes CDX's statuscode:200
         filter, so CDX's closest row is the challenge itself."""
         dl = _make_downloader()
-        dl.session.get = _Recorder(_BadCaptureWayback(
-            _Response(200, CHALLENGE),
-            lambda kwargs: _cdx_rows(TS, "20191231230000"),
-        ))
+        dl.session.get = _Recorder(
+            _BadCaptureWayback(
+                _Response(200, CHALLENGE),
+                lambda kwargs: _cdx_rows(TS, "20191231230000"),
+            )
+        )
         assert dl.download_file("http://example.com/about") == GOOD_PAGE
         assert len(_cdx_calls(dl)) == 1
-        assert dl.session.get.calls[-1][0] == (
-            "https://web.archive.org/web/20191231230000if_/http://example.com/about"
-        )
+        assert dl.session.get.calls[-1][0] == ("https://web.archive.org/web/20191231230000if_/http://example.com/about")
 
     def test_challenge_200_skips_the_capture_wayback_redirected_to(self):
         served = "20200101000512"
@@ -238,7 +246,9 @@ class TestBadCapture:
             if url == CDX:
                 return _cdx_rows(served, "20191231230000")
             if f"/{TS}" in url or f"/{served}" in url:
-                return _Response(200, CHALLENGE, url=f"https://web.archive.org/web/{served}if_/http://example.com/about")
+                return _Response(
+                    200, CHALLENGE, url=f"https://web.archive.org/web/{served}if_/http://example.com/about"
+                )
             return _Response(200, GOOD_PAGE, url=url)
 
         dl = _make_downloader()
@@ -250,10 +260,12 @@ class TestBadCapture:
         """Wayback's own 429 has no memento-datetime; an archived one is the
         site's answer, and a page is treated like an asset."""
         dl = _make_downloader()
-        dl.session.get = _Recorder(_BadCaptureWayback(
-            _Response(429, b"Too Many Requests", headers=ARCHIVED),
-            lambda kwargs: _cdx_rows("20191231230000"),
-        ))
+        dl.session.get = _Recorder(
+            _BadCaptureWayback(
+                _Response(429, b"Too Many Requests", headers=ARCHIVED),
+                lambda kwargs: _cdx_rows("20191231230000"),
+            )
+        )
         assert dl.download_file("http://example.com/about") == GOOD_PAGE
         assert len(_cdx_calls(dl)) == 1
         assert dl._last_failure is None
@@ -279,10 +291,12 @@ class TestBadCapture:
     def test_no_good_capture_returns_none_after_one_lookup(self):
         for rows in (b"[]", b'[["timestamp"]]'):
             dl = _make_downloader()
-            dl.session.get = _Recorder(_BadCaptureWayback(
-                _Response(403, CHALLENGE, headers=ARCHIVED),
-                lambda kwargs: _Response(200, rows),
-            ))
+            dl.session.get = _Recorder(
+                _BadCaptureWayback(
+                    _Response(403, CHALLENGE, headers=ARCHIVED),
+                    lambda kwargs, rows=rows: _Response(200, rows),
+                )
+            )
             assert dl.download_file("http://example.com/about") is None
             assert len(_cdx_calls(dl)) == 1
 
@@ -296,10 +310,12 @@ class TestBadCapture:
 
     def test_cdx_stops_after_three_consecutive_failures(self):
         dl = _make_downloader()
-        dl.session.get = _Recorder(_BadCaptureWayback(
-            _Response(403, CHALLENGE, headers=ARCHIVED),
-            lambda kwargs: _Response(503, b"<html>Temporarily Offline</html>"),
-        ))
+        dl.session.get = _Recorder(
+            _BadCaptureWayback(
+                _Response(403, CHALLENGE, headers=ARCHIVED),
+                lambda kwargs: _Response(503, b"<html>Temporarily Offline</html>"),
+            )
+        )
         for n in range(5):
             assert dl.download_file(f"http://example.com/p{n}") is None
         assert len(_cdx_calls(dl)) == 3
@@ -307,20 +323,24 @@ class TestBadCapture:
     def test_cdx_success_resets_the_failure_count(self):
         answers = iter([_Response(503, b"x"), _Response(503, b"x"), _cdx_rows("20191231230000")] * 3)
         dl = _make_downloader()
-        dl.session.get = _Recorder(_BadCaptureWayback(
-            _Response(403, CHALLENGE, headers=ARCHIVED),
-            lambda kwargs: next(answers),
-        ))
+        dl.session.get = _Recorder(
+            _BadCaptureWayback(
+                _Response(403, CHALLENGE, headers=ARCHIVED),
+                lambda kwargs: next(answers),
+            )
+        )
         for n in range(9):
             dl.download_file(f"http://example.com/p{n}")
         assert len(_cdx_calls(dl)) == 9
 
     def test_cdx_lookups_are_capped_per_run(self):
         dl = _make_downloader()
-        dl.session.get = _Recorder(_BadCaptureWayback(
-            _Response(403, CHALLENGE, headers=ARCHIVED),
-            lambda kwargs: _Response(200, b"[]"),
-        ))
+        dl.session.get = _Recorder(
+            _BadCaptureWayback(
+                _Response(403, CHALLENGE, headers=ARCHIVED),
+                lambda kwargs: _Response(200, b"[]"),
+            )
+        )
         for n in range(30):
             dl.download_file(f"http://example.com/p{n}")
         assert len(_cdx_calls(dl)) == 25
@@ -411,12 +431,15 @@ class TestThrottling:
         assert response.status_code == 200
         assert local_server.hits == 3
 
-    @pytest.mark.parametrize("status, headers", [
-        (503, {}),
-        (503, {"Retry-After": "0"}),
-        (413, {"Retry-After": "0"}),
-        (429, {"Retry-After": "0", **ARCHIVED}),
-    ])
+    @pytest.mark.parametrize(
+        "status, headers",
+        [
+            (503, {}),
+            (503, {"Retry-After": "0"}),
+            (413, {"Retry-After": "0"}),
+            (429, {"Retry-After": "0", **ARCHIVED}),
+        ],
+    )
     def test_5xx_is_not_retried(self, local_server, status, headers):
         """Only Wayback's own 429 is retried: a 503 or 413 with Retry-After
         is not, and neither is an archived 429 (it has memento-datetime)."""
@@ -545,8 +568,7 @@ class TestDotenv:
     def test_cli_reads_dotenv_from_the_working_directory(self, monkeypatch, tmp_path):
         """The package lives outside tmp_path, so only a cwd search finds this file."""
         (tmp_path / ".env").write_text(
-            f"WAYBACK_URL=https://web.archive.org/web/{TS}/http://from-dotenv.example/\n"
-            f"OUTPUT_DIR={tmp_path / 'out'}\n"
+            f"WAYBACK_URL=https://web.archive.org/web/{TS}/http://from-dotenv.example/\nOUTPUT_DIR={tmp_path / 'out'}\n"
         )
         monkeypatch.chdir(tmp_path)
         monkeypatch.delenv("WAYBACK_URL", raising=False)
@@ -579,8 +601,12 @@ class TestStartRedirect:
         def handler(url, kwargs):
             if url.endswith("/http://example.com/"):
                 return _Response(200, start, url=final)
-            if "example-new.com/about" in url or "example-new.com/contact.html" in url \
-                    or "www.example.com/about" in url or "www.example.com/contact.html" in url:
+            if (
+                "example-new.com/about" in url
+                or "example-new.com/contact.html" in url
+                or "www.example.com/about" in url
+                or "www.example.com/contact.html" in url
+            ):
                 return _Response(200, GOOD_PAGE, url=url)
             return _Response(404)
 
@@ -606,11 +632,14 @@ class TestStartRedirect:
 
 
 class TestJqueryReplacement:
-    @pytest.mark.parametrize("src, version", [
-        ("/js/jquery-1.7.2/jquery.min.js", "1.7.2"),
-        ("/wp-includes/js/jquery/jquery.min.js?ver=3.6.0", "3.6.0"),
-        ("/js/jquery.min.js", "3.7.1"),
-    ])
+    @pytest.mark.parametrize(
+        "src, version",
+        [
+            ("/js/jquery-1.7.2/jquery.min.js", "1.7.2"),
+            ("/wp-includes/js/jquery/jquery.min.js?ver=3.6.0", "3.6.0"),
+            ("/js/jquery.min.js", "3.7.1"),
+        ],
+    )
     def test_the_version_named_in_the_url_is_fetched(self, tmp_path, src, version):
         start = f'<!DOCTYPE html><html><head><script src="{src}"></script></head><body></body></html>'.encode()
         dl = _make_downloader(output_dir=tmp_path / "out")
@@ -627,11 +656,14 @@ class TestJqueryReplacement:
         live = [url for url, _ in dl.session.get.calls if "code.jquery.com" in url]
         assert live == [f"https://code.jquery.com/jquery-{version}.min.js"]
 
-    @pytest.mark.parametrize("src, tried", [
-        ("/js/jquery.min.js?ver=5.8.1", ["5.8.1", "3.7.1"]),
-        ("/js/jquery-1.9/jquery.min.js", ["1.9", "1.9.0"]),
-        ("/wp-includes/js/jquery/jquery.min.js?ver=1.0", ["1.0", "1.0.0", "3.7.1"]),
-    ])
+    @pytest.mark.parametrize(
+        "src, tried",
+        [
+            ("/js/jquery.min.js?ver=5.8.1", ["5.8.1", "3.7.1"]),
+            ("/js/jquery-1.9/jquery.min.js", ["1.9", "1.9.0"]),
+            ("/wp-includes/js/jquery/jquery.min.js?ver=1.0", ["1.0", "1.0.0", "3.7.1"]),
+        ],
+    )
     def test_a_version_the_cdn_lacks_falls_back(self, tmp_path, src, tried):
         """?ver= is often the WordPress version, and a two-part version has no
         file on code.jquery.com: try x.y.0, then 3.7.1."""
@@ -659,7 +691,11 @@ class TestCdxOutageIsNotReportedAsNoCapture:
 
     def test_outage_says_the_index_did_not_answer(self, capsys):
         dl = _make_downloader()
-        dl.session.get = _Recorder(_BadCaptureWayback(_Response(403, b"x", headers=ARCHIVED), lambda kwargs: _Response(503, b"<html>Temporarily Offline")))
+        dl.session.get = _Recorder(
+            _BadCaptureWayback(
+                _Response(403, b"x", headers=ARCHIVED), lambda kwargs: _Response(503, b"<html>Temporarily Offline")
+            )
+        )
         assert dl.download_file("https://example.com/") is None
         out = capsys.readouterr().out
         assert "CDX index did not answer" in out
@@ -667,7 +703,9 @@ class TestCdxOutageIsNotReportedAsNoCapture:
 
     def test_empty_answer_says_no_good_capture(self, capsys):
         dl = _make_downloader()
-        dl.session.get = _Recorder(_BadCaptureWayback(_Response(403, b"x", headers=ARCHIVED), lambda kwargs: _cdx_rows()))
+        dl.session.get = _Recorder(
+            _BadCaptureWayback(_Response(403, b"x", headers=ARCHIVED), lambda kwargs: _cdx_rows())
+        )
         assert dl.download_file("https://example.com/") is None
         out = capsys.readouterr().out
         assert "No good capture found" in out

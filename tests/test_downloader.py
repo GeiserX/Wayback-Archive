@@ -1,9 +1,10 @@
 """Tests for downloader module."""
 
 import os
-import pytest
+from unittest.mock import Mock, patch
+
 from bs4 import BeautifulSoup
-from unittest.mock import Mock, patch, MagicMock
+
 from wayback_archive.config import Config
 from wayback_archive.downloader import WaybackDownloader
 
@@ -207,4 +208,3 @@ class TestWaybackDownloader:
         for ext in [".css", ".js", ".png", ".jpg", ".gif", ".svg", ".woff2", ".pdf", ".json", ".xml"]:
             url = f"https://example.com/file{ext}"
             assert not WaybackDownloader._is_html_url(url), f"{url} should NOT be HTML"
-

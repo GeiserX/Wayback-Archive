@@ -1,21 +1,17 @@
 """Comprehensive tests for downloader module to achieve 90%+ coverage."""
 
 import os
-import hashlib
-import pytest
-from pathlib import Path
-from datetime import datetime, timedelta
-from unittest.mock import Mock, patch, MagicMock, call
-from urllib.parse import urlparse
+from unittest.mock import MagicMock, Mock, patch
 
-from bs4 import BeautifulSoup
+import pytest
+
 from wayback_archive.config import Config
 from wayback_archive.downloader import WaybackDownloader
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_downloader(wayback_url=None, **env_overrides):
     """Create a downloader with a clean environment."""
@@ -35,6 +31,7 @@ def _cleanup_env(*keys):
 # ===================================================================
 # _parse_wayback_url
 # ===================================================================
+
 
 class TestParseWaybackUrl:
     """Tests for Wayback URL parsing."""
@@ -86,8 +83,8 @@ class TestParseWaybackUrl:
 # _is_internal_url
 # ===================================================================
 
-class TestIsInternalUrl:
 
+class TestIsInternalUrl:
     def setup_method(self):
         self.dl = _make_downloader()
 
@@ -142,8 +139,8 @@ class TestIsInternalUrl:
 # _is_squarespace_cdn
 # ===================================================================
 
-class TestIsSquarespaceCdn:
 
+class TestIsSquarespaceCdn:
     def setup_method(self):
         self.dl = _make_downloader()
 
@@ -167,8 +164,8 @@ class TestIsSquarespaceCdn:
 # _is_tracker / _is_ad / _is_contact_link
 # ===================================================================
 
-class TestPatternDetection:
 
+class TestPatternDetection:
     def setup_method(self):
         self.dl = _make_downloader()
 
@@ -206,8 +203,8 @@ class TestPatternDetection:
 # _convert_to_wayback_url_with_timestamp
 # ===================================================================
 
-class TestConvertToWaybackUrl:
 
+class TestConvertToWaybackUrl:
     def setup_method(self):
         self.dl = _make_downloader()
 
@@ -261,8 +258,8 @@ class TestConvertToWaybackUrl:
 # _extract_original_url_from_path
 # ===================================================================
 
-class TestExtractOriginalUrl:
 
+class TestExtractOriginalUrl:
     def setup_method(self):
         self.dl = _make_downloader()
 
@@ -319,8 +316,8 @@ class TestExtractOriginalUrl:
 # _normalize_url
 # ===================================================================
 
-class TestNormalizeUrl:
 
+class TestNormalizeUrl:
     def setup_method(self):
         self.dl = _make_downloader()
 
@@ -348,10 +345,7 @@ class TestNormalizeUrl:
         assert result.startswith("http://")
 
     def test_wayback_path_extraction(self):
-        result = self.dl._normalize_url(
-            "/web/20250417203037/http://example.com/page",
-            "http://example.com/"
-        )
+        result = self.dl._normalize_url("/web/20250417203037/http://example.com/page", "http://example.com/")
         assert "web.archive.org" not in result
         assert "example.com/page" in result
 
@@ -365,10 +359,7 @@ class TestNormalizeUrl:
         assert result.startswith("http://")
 
     def test_relative_web_path(self):
-        result = self.dl._normalize_url(
-            "/web/20250417203037/http://example.com/about",
-            "http://example.com/"
-        )
+        result = self.dl._normalize_url("/web/20250417203037/http://example.com/about", "http://example.com/")
         assert "example.com/about" in result
 
 
@@ -376,8 +367,8 @@ class TestNormalizeUrl:
 # _get_local_path
 # ===================================================================
 
-class TestGetLocalPath:
 
+class TestGetLocalPath:
     def setup_method(self):
         self.dl = _make_downloader()
 
@@ -439,8 +430,8 @@ class TestGetLocalPath:
 # _get_relative_link_path
 # ===================================================================
 
-class TestGetRelativeLinkPath:
 
+class TestGetRelativeLinkPath:
     def setup_method(self):
         self.dl = _make_downloader()
 
@@ -479,7 +470,7 @@ class TestGetRelativeLinkPath:
 
     def test_no_current_page_url(self):
         """When _current_page_url is not set, path is returned as-is."""
-        if hasattr(self.dl, '_current_page_url'):
+        if hasattr(self.dl, "_current_page_url"):
             del self.dl._current_page_url
         result = self.dl._get_relative_link_path("http://example.com/about", "page")
         assert "about" in result
@@ -500,8 +491,8 @@ class TestGetRelativeLinkPath:
 # _to_relative_path
 # ===================================================================
 
-class TestToRelativePath:
 
+class TestToRelativePath:
     def setup_method(self):
         self.dl = _make_downloader()
 
@@ -514,7 +505,7 @@ class TestToRelativePath:
         assert ".." in result
 
     def test_without_current_page(self):
-        if hasattr(self.dl, '_current_page_url'):
+        if hasattr(self.dl, "_current_page_url"):
             del self.dl._current_page_url
         result = self.dl._to_relative_path("/images/pic.jpg")
         assert result == "/images/pic.jpg"
@@ -529,8 +520,8 @@ class TestToRelativePath:
 # _fallback_timestamps
 # ===================================================================
 
-class TestFallbackTimestamps:
 
+class TestFallbackTimestamps:
     def setup_method(self):
         self.dl = _make_downloader()
 
@@ -548,7 +539,7 @@ class TestFallbackTimestamps:
 
     def test_excludes_original(self):
         """Variant list should not include the exact original timestamp."""
-        original_ts = self.dl.original_datetime.strftime('%Y%m%d%H%M%S')
+        original_ts = self.dl.original_datetime.strftime("%Y%m%d%H%M%S")
         variants = self.dl._fallback_timestamps()
         assert original_ts not in variants
 
@@ -557,8 +548,8 @@ class TestFallbackTimestamps:
 # _is_corrupted_font
 # ===================================================================
 
-class TestIsCorruptedFont:
 
+class TestIsCorruptedFont:
     def setup_method(self):
         self.dl = _make_downloader()
 
@@ -566,31 +557,31 @@ class TestIsCorruptedFont:
         _cleanup_env("WAYBACK_URL")
 
     def test_html_content_in_woff(self):
-        content = b'<!DOCTYPE html><html><body>Error</body></html>'
+        content = b"<!DOCTYPE html><html><body>Error</body></html>"
         assert self.dl._is_corrupted_font(content, "http://example.com/font.woff") is True
 
     def test_html_content_in_ttf(self):
-        content = b'<html><body>Not Found</body></html>'
+        content = b"<html><body>Not Found</body></html>"
         assert self.dl._is_corrupted_font(content, "http://example.com/font.ttf") is True
 
     def test_valid_font_binary(self):
-        content = b'\x00\x01\x00\x00' + b'\x00' * 200
+        content = b"\x00\x01\x00\x00" + b"\x00" * 200
         assert self.dl._is_corrupted_font(content, "http://example.com/font.woff2") is False
 
     def test_non_font_extension(self):
-        content = b'<!DOCTYPE html>'
+        content = b"<!DOCTYPE html>"
         assert self.dl._is_corrupted_font(content, "http://example.com/page.html") is False
 
     def test_svg_font(self):
-        content = b'<!DOCTYPE html><html>'
+        content = b"<!DOCTYPE html><html>"
         assert self.dl._is_corrupted_font(content, "http://example.com/font.svg") is True
 
     def test_eot_font(self):
-        content = b'<HTML><BODY>Error</BODY></HTML>'
+        content = b"<HTML><BODY>Error</BODY></HTML>"
         assert self.dl._is_corrupted_font(content, "http://example.com/font.eot") is True
 
     def test_otf_font(self):
-        content = b'<!DOCTYPE html>'
+        content = b"<!DOCTYPE html>"
         assert self.dl._is_corrupted_font(content, "http://example.com/font.otf") is True
 
 
@@ -598,8 +589,8 @@ class TestIsCorruptedFont:
 # _get_file_type_from_url
 # ===================================================================
 
-class TestGetFileTypeFromUrl:
 
+class TestGetFileTypeFromUrl:
     def setup_method(self):
         self.dl = _make_downloader()
 
@@ -648,8 +639,8 @@ class TestGetFileTypeFromUrl:
 # _optimize_html
 # ===================================================================
 
-class TestOptimizeHtml:
 
+class TestOptimizeHtml:
     def setup_method(self):
         self.dl = _make_downloader()
 
@@ -673,6 +664,7 @@ class TestOptimizeHtml:
         html = "<html><body>Test</body></html>"
         # Create a mock module that raises on minify()
         import sys
+
         fake_module = MagicMock()
         fake_module.minify = Mock(side_effect=Exception("fail"))
         with patch.dict(sys.modules, {"minify_html": fake_module}):
@@ -684,8 +676,8 @@ class TestOptimizeHtml:
 # _minify_js / _minify_css
 # ===================================================================
 
-class TestMinification:
 
+class TestMinification:
     def setup_method(self):
         self.dl = _make_downloader()
 
@@ -706,6 +698,7 @@ class TestMinification:
         self.dl.config.minify_js = True
         js = "function test() { return 1; }"
         import sys
+
         fake_module = MagicMock()
         fake_module.jsmin = Mock(side_effect=Exception("fail"))
         with patch.dict(sys.modules, {"rjsmin": fake_module}):
@@ -716,6 +709,7 @@ class TestMinification:
         self.dl.config.minify_css = True
         css = "body { margin: 0; }"
         import sys
+
         fake_module = MagicMock()
         fake_module.cssmin = Mock(side_effect=Exception("fail"))
         with patch.dict(sys.modules, {"cssmin": fake_module}):
@@ -727,8 +721,8 @@ class TestMinification:
 # _extract_css_urls
 # ===================================================================
 
-class TestExtractCssUrls:
 
+class TestExtractCssUrls:
     def setup_method(self):
         self.dl = _make_downloader()
 
@@ -770,8 +764,8 @@ class TestExtractCssUrls:
 # _rewrite_css_urls
 # ===================================================================
 
-class TestRewriteCssUrls:
 
+class TestRewriteCssUrls:
     def setup_method(self):
         self.dl = _make_downloader()
         self.dl._current_page_url = "http://example.com/css/style.css"
@@ -780,19 +774,19 @@ class TestRewriteCssUrls:
         _cleanup_env("WAYBACK_URL")
 
     def test_wayback_url_rewritten(self):
-        css = 'body { background: url(https://web.archive.org/web/20250417203037im_/http://example.com/bg.jpg); }'
+        css = "body { background: url(https://web.archive.org/web/20250417203037im_/http://example.com/bg.jpg); }"
         result = self.dl._rewrite_css_urls(css, "http://example.com/css/style.css")
         assert "web.archive.org" not in result
 
     def test_internal_url_made_relative(self):
         self.dl.config.make_internal_links_relative = True
-        css = 'body { background: url(http://example.com/images/bg.jpg); }'
+        css = "body { background: url(http://example.com/images/bg.jpg); }"
         result = self.dl._rewrite_css_urls(css, "http://example.com/css/style.css")
         assert "http://example.com" not in result
 
     def test_google_fonts_url_rewritten(self):
         self.dl.config.make_internal_links_relative = True
-        css = 'body { font-family: url(https://fonts.gstatic.com/s/roboto/v29/file.woff2); }'
+        css = "body { font-family: url(https://fonts.gstatic.com/s/roboto/v29/file.woff2); }"
         result = self.dl._rewrite_css_urls(css, "https://fonts.googleapis.com/css")
         assert "fonts.gstatic.com" in result
 
@@ -808,8 +802,8 @@ class TestRewriteCssUrls:
 # _remove_corrupted_fonts_from_css
 # ===================================================================
 
-class TestRemoveCorruptedFontsFromCss:
 
+class TestRemoveCorruptedFontsFromCss:
     def setup_method(self):
         self.dl = _make_downloader()
 
@@ -849,8 +843,8 @@ class TestRemoveCorruptedFontsFromCss:
 # _remove_legacy_font_formats_from_css
 # ===================================================================
 
-class TestRemoveLegacyFontFormats:
 
+class TestRemoveLegacyFontFormats:
     def setup_method(self):
         self.dl = _make_downloader()
 
@@ -883,30 +877,38 @@ class TestRemoveLegacyFontFormats:
 # _check_and_remove_corrupted_fonts_in_css
 # ===================================================================
 
-class TestCheckAndRemoveCorruptedFontsInCss:
 
+class TestCheckAndRemoveCorruptedFontsInCss:
     def setup_method(self):
         self.dl = _make_downloader()
 
     def teardown_method(self):
         _cleanup_env("WAYBACK_URL")
 
-    @patch.object(WaybackDownloader, '_convert_to_wayback_url_with_timestamp', return_value="https://web.archive.org/web/20250417203037im_/http://example.com/font.woff")
+    @patch.object(
+        WaybackDownloader,
+        "_convert_to_wayback_url_with_timestamp",
+        return_value="https://web.archive.org/web/20250417203037im_/http://example.com/font.woff",
+    )
     def test_detects_corrupted_font(self, mock_convert):
         mock_response = Mock()
         mock_response.status_code = 200
-        mock_response.content = b'<!DOCTYPE html><html>Error</html>'
+        mock_response.content = b"<!DOCTYPE html><html>Error</html>"
         self.dl.session.get = Mock(return_value=mock_response)
 
         css = "@font-face { src: url('http://example.com/font.woff'); }"
         self.dl._check_and_remove_corrupted_fonts_in_css(css, "http://example.com/")
         assert len(self.dl.corrupted_fonts) > 0
 
-    @patch.object(WaybackDownloader, '_convert_to_wayback_url_with_timestamp', return_value="https://web.archive.org/web/20250417203037im_/http://example.com/font.woff2")
+    @patch.object(
+        WaybackDownloader,
+        "_convert_to_wayback_url_with_timestamp",
+        return_value="https://web.archive.org/web/20250417203037im_/http://example.com/font.woff2",
+    )
     def test_valid_font_not_flagged(self, mock_convert):
         mock_response = Mock()
         mock_response.status_code = 200
-        mock_response.content = b'\x00\x01\x00\x00' + b'\x00' * 200
+        mock_response.content = b"\x00\x01\x00\x00" + b"\x00" * 200
         self.dl.session.get = Mock(return_value=mock_response)
 
         css = "@font-face { src: url('http://example.com/font.woff2'); }"
@@ -930,7 +932,7 @@ class TestCheckAndRemoveCorruptedFontsInCss:
         """Relative font URLs should be resolved to absolute before checking."""
         mock_response = Mock()
         mock_response.status_code = 200
-        mock_response.content = b'\x00\x01\x00\x00' + b'\x00' * 200
+        mock_response.content = b"\x00\x01\x00\x00" + b"\x00" * 200
         self.dl.session.get = Mock(return_value=mock_response)
 
         css = "@font-face { src: url('/fonts/regular.woff'); }"
@@ -943,8 +945,8 @@ class TestCheckAndRemoveCorruptedFontsInCss:
 # _extract_js_urls
 # ===================================================================
 
-class TestExtractJsUrls:
 
+class TestExtractJsUrls:
     def setup_method(self):
         self.dl = _make_downloader()
 
@@ -986,8 +988,8 @@ class TestExtractJsUrls:
 # _optimize_image
 # ===================================================================
 
-class TestOptimizeImage:
 
+class TestOptimizeImage:
     def setup_method(self):
         self.dl = _make_downloader()
 
@@ -996,13 +998,13 @@ class TestOptimizeImage:
 
     def test_optimization_disabled(self):
         self.dl.config.optimize_images = False
-        content = b'\x89PNG\r\n\x1a\n' + b'\x00' * 100
+        content = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
         result = self.dl._optimize_image(content)
         assert result == content
 
     def test_optimization_enabled_jpeg(self):
         self.dl.config.optimize_images = True
-        content = b'\xff\xd8\xff' + b'\x00' * 100
+        content = b"\xff\xd8\xff" + b"\x00" * 100
         # If Pillow is available, it processes; if not, returns original via exception handler
         result = self.dl._optimize_image(content, "JPEG")
         assert result is not None
@@ -1018,8 +1020,8 @@ class TestOptimizeImage:
 # download_file
 # ===================================================================
 
-class TestDownloadFile:
 
+class TestDownloadFile:
     def setup_method(self):
         self.dl = _make_downloader()
 
@@ -1038,7 +1040,7 @@ class TestDownloadFile:
 
     def test_corrupted_font_returns_none(self):
         mock_response = Mock()
-        mock_response.content = b'<!DOCTYPE html><html>Error</html>'
+        mock_response.content = b"<!DOCTYPE html><html>Error</html>"
         mock_response.raise_for_status = Mock()
         mock_response.status_code = 200
         self.dl.session.get = Mock(return_value=mock_response)
@@ -1050,11 +1052,12 @@ class TestDownloadFile:
     def test_html_page_tries_iframe_first(self):
         """HTML pages should try the if_ version first."""
         call_count = 0
+
         def mock_get(url, **kwargs):
             nonlocal call_count
             call_count += 1
             resp = Mock()
-            resp.content = b'<!DOCTYPE html><html><body>Hello</body></html>'
+            resp.content = b"<!DOCTYPE html><html><body>Hello</body></html>"
             resp.raise_for_status = Mock()
             resp.status_code = 200
             return resp
@@ -1070,6 +1073,7 @@ class TestDownloadFile:
         import requests
 
         attempt = 0
+
         def mock_get(url, **kwargs):
             nonlocal attempt
             attempt += 1
@@ -1079,7 +1083,7 @@ class TestDownloadFile:
                 resp.status_code = 404
                 error = requests.exceptions.HTTPError(response=resp)
                 resp.raise_for_status = Mock(side_effect=error)
-                resp.content = b''
+                resp.content = b""
                 return resp
             else:
                 # Later attempt succeeds
@@ -1097,6 +1101,7 @@ class TestDownloadFile:
         import requests
 
         attempt = 0
+
         def mock_get(url, **kwargs):
             nonlocal attempt
             attempt += 1
@@ -1128,6 +1133,7 @@ class TestDownloadFile:
     def test_html_if_version_wrapper_only_falls_through(self):
         """If the if_ version returns only the Wayback wrapper (no actual content), fall through."""
         attempt = 0
+
         def mock_get(url, **kwargs):
             nonlocal attempt
             attempt += 1
@@ -1136,9 +1142,9 @@ class TestDownloadFile:
             resp.raise_for_status = Mock()
             if attempt == 1:
                 # if_ version returns wrapper-only page
-                resp.content = b'<html><head><title>Wayback Machine</title></head></html>'
+                resp.content = b"<html><head><title>Wayback Machine</title></head></html>"
             else:
-                resp.content = b'<html><body>Real content</body></html>'
+                resp.content = b"<html><body>Real content</body></html>"
             return resp
 
         self.dl.session.get = mock_get
@@ -1155,7 +1161,7 @@ class TestDownloadFile:
                 resp.status_code = 404
                 error = requests.exceptions.HTTPError(response=resp)
                 resp.raise_for_status = Mock(side_effect=error)
-                resp.content = b''
+                resp.content = b""
             else:
                 resp.status_code = 200
                 resp.content = b"from live"
@@ -1176,10 +1182,10 @@ class TestDownloadFile:
                 resp.status_code = 404
                 error = requests.exceptions.HTTPError(response=resp)
                 resp.raise_for_status = Mock(side_effect=error)
-                resp.content = b''
+                resp.content = b""
             else:
                 resp.status_code = 200
-                resp.content = b'<!DOCTYPE html><html>Error</html>'
+                resp.content = b"<!DOCTYPE html><html>Error</html>"
                 resp.raise_for_status = Mock()
             return resp
 
@@ -1193,8 +1199,8 @@ class TestDownloadFile:
 # _process_html - comprehensive
 # ===================================================================
 
-class TestProcessHtml:
 
+class TestProcessHtml:
     def setup_method(self):
         self.dl = _make_downloader()
 
@@ -1217,7 +1223,7 @@ class TestProcessHtml:
         assert "banner-styles.css" not in processed
 
     def test_removes_inline_wayback_scripts(self):
-        html = '<html><body><script>var __wm = {wombat: true};</script><p>Content</p></body></html>'
+        html = "<html><body><script>var __wm = {wombat: true};</script><p>Content</p></body></html>"
         processed, _ = self.dl._process_html(html, "http://example.com/")
         assert "__wm" not in processed
 
@@ -1313,17 +1319,17 @@ class TestProcessHtml:
         assert any("app.js" in l for l in links)
 
     def test_removes_html_comments(self):
-        html = '<html><body><!-- This is a comment --><p>Content</p></body></html>'
+        html = "<html><body><!-- This is a comment --><p>Content</p></body></html>"
         processed, _ = self.dl._process_html(html, "http://example.com/")
         assert "This is a comment" not in processed
 
     def test_static_stub_injection(self):
-        html = '<html><body><script>Static.SQUARESPACE_CONTEXT = {};</script></body></html>'
+        html = "<html><body><script>Static.SQUARESPACE_CONTEXT = {};</script></body></html>"
         processed, _ = self.dl._process_html(html, "http://example.com/")
         assert "window.Static" in processed
 
     def test_static_stub_after_rollups(self):
-        html = '<html><body><script>SQUARESPACE_ROLLUPS = {};</script><script>Static.render();</script></body></html>'
+        html = "<html><body><script>SQUARESPACE_ROLLUPS = {};</script><script>Static.render();</script></body></html>"
         processed, _ = self.dl._process_html(html, "http://example.com/")
         assert "window.Static" in processed
 
@@ -1344,7 +1350,7 @@ class TestProcessHtml:
         assert "web.archive.org" not in processed
 
     def test_style_tag_rewrite(self):
-        html = '<html><head><style>body { background: url(/web/20250417203037im_/http://example.com/bg.jpg); }</style></head><body>Test</body></html>'
+        html = "<html><head><style>body { background: url(/web/20250417203037im_/http://example.com/bg.jpg); }</style></head><body>Test</body></html>"
         processed, links = self.dl._process_html(html, "http://example.com/index.html")
         assert "web.archive.org" not in processed
 
@@ -1427,7 +1433,7 @@ class TestProcessHtml:
 
     def test_remaining_domain_attributes_rewrite(self):
         """Attributes containing domain references or web.archive.org should be rewritten."""
-        html = f'<html><body><div data-video_src="https://web.archive.org/web/20250417203037/http://example.com/video.mp4">Content</div></body></html>'
+        html = '<html><body><div data-video_src="https://web.archive.org/web/20250417203037/http://example.com/video.mp4">Content</div></body></html>'
         processed, _ = self.dl._process_html(html, "http://example.com/index.html")
         assert "web.archive.org" not in processed
 
@@ -1435,6 +1441,7 @@ class TestProcessHtml:
 # ===================================================================
 # download (main method)
 # ===================================================================
+
 
 class TestDownloadMain:
     """Tests for the main download() method.
@@ -1466,7 +1473,7 @@ class TestDownloadMain:
         """download() stops when max_files is reached."""
         dl = self._make_dl(tmp_path)
         dl.config.max_files = 1
-        dl.download_file = Mock(return_value=b'<html><body>Hello</body></html>')
+        dl.download_file = Mock(return_value=b"<html><body>Hello</body></html>")
         dl._process_html = Mock(return_value=("<html><body>Hello</body></html>", []))
         dl.download()
         assert len(dl.config.visited_urls) == 1
@@ -1483,28 +1490,28 @@ class TestDownloadMain:
         """CSS files should be processed and their URLs extracted."""
         dl = self._make_dl(tmp_path, "http://example.com/style.css")
         dl.config.max_files = 1
-        dl.download_file = Mock(return_value=b'body { background: url(/bg.jpg); }')
+        dl.download_file = Mock(return_value=b"body { background: url(/bg.jpg); }")
         dl.download()
 
     def test_download_processes_js_file(self, tmp_path):
         """JavaScript files should be processed."""
         dl = self._make_dl(tmp_path, "http://example.com/app.js")
         dl.config.max_files = 1
-        dl.download_file = Mock(return_value=b'var x = 1;')
+        dl.download_file = Mock(return_value=b"var x = 1;")
         dl.download()
 
     def test_download_processes_image_file(self, tmp_path):
         """Image files should be processed (optimization path)."""
         dl = self._make_dl(tmp_path, "http://example.com/image.png")
         dl.config.max_files = 1
-        dl.download_file = Mock(return_value=b'\x89PNG\r\n\x1a\n' + b'\x00' * 100)
+        dl.download_file = Mock(return_value=b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
         dl.download()
 
     def test_download_processes_font_file(self, tmp_path):
         """Font files should be saved as-is."""
         dl = self._make_dl(tmp_path, "http://example.com/font.woff2")
         dl.config.max_files = 1
-        dl.download_file = Mock(return_value=b'\x00\x01\x00\x00' + b'\x00' * 100)
+        dl.download_file = Mock(return_value=b"\x00\x01\x00\x00" + b"\x00" * 100)
         dl.download()
 
     def test_download_jquery_cdn_fallback(self, tmp_path):
@@ -1513,7 +1520,7 @@ class TestDownloadMain:
         dl.config.max_files = 1
         dl.download_file = Mock(return_value=None)
         cdn_response = Mock()
-        cdn_response.content = b'/* jQuery */'
+        cdn_response.content = b"/* jQuery */"
         cdn_response.raise_for_status = Mock()
         cdn_response.status_code = 200
         dl.session.get = Mock(return_value=cdn_response)
@@ -1525,16 +1532,14 @@ class TestDownloadMain:
         dl.config.max_files = 2
 
         call_count = 0
+
         def fake_download_file(url):
             nonlocal call_count
             call_count += 1
-            return b'<html><body>Hello</body></html>'
+            return b"<html><body>Hello</body></html>"
 
         dl.download_file = fake_download_file
-        dl._process_html = Mock(return_value=(
-            "<html><body>Hello</body></html>",
-            ["http://example.com/"]
-        ))
+        dl._process_html = Mock(return_value=("<html><body>Hello</body></html>", ["http://example.com/"]))
         dl.download()
         assert call_count == 1
 
@@ -1552,16 +1557,14 @@ class TestDownloadMain:
         """Content type should be detected from content signatures."""
         dl = self._make_dl(tmp_path, "http://example.com/unknown")
         dl.config.max_files = 1
-        dl.download_file = Mock(
-            return_value=b'/* CSS content */ @media screen { body { margin: 0; } }'
-        )
+        dl.download_file = Mock(return_value=b"/* CSS content */ @media screen { body { margin: 0; } }")
         dl.download()
 
     def test_download_unknown_binary(self, tmp_path):
         """Unknown binary content should be saved as-is."""
         dl = self._make_dl(tmp_path, "http://example.com/file.zip")
         dl.config.max_files = 1
-        dl.download_file = Mock(return_value=b'PK\x03\x04' + b'\x00' * 100)
+        dl.download_file = Mock(return_value=b"PK\x03\x04" + b"\x00" * 100)
         dl.download()
 
     def test_download_html_with_new_links(self, tmp_path):
@@ -1570,16 +1573,18 @@ class TestDownloadMain:
         dl.config.max_files = 2
 
         call_count = 0
+
         def fake_download_file(url):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return b'<html><body>Main page</body></html>'
-            return b'body { margin: 0; }'
+                return b"<html><body>Main page</body></html>"
+            return b"body { margin: 0; }"
 
         dl.download_file = fake_download_file
 
         first_call = True
+
         def fake_process_html(html, base_url):
             nonlocal first_call
             if first_call:
@@ -1596,7 +1601,7 @@ class TestDownloadMain:
         dl = self._make_dl(tmp_path)
         dl.config.max_files = 1
         dl.corrupted_fonts.add("http://example.com/font.woff")
-        dl.download_file = Mock(return_value=b'<html><body>Test</body></html>')
+        dl.download_file = Mock(return_value=b"<html><body>Test</body></html>")
         dl._process_html = Mock(return_value=("<html>Test</html>", []))
         dl.download()
 
@@ -1604,7 +1609,7 @@ class TestDownloadMain:
         """Fragment-only URLs should be skipped."""
         dl = self._make_dl(tmp_path)
         dl.config.max_files = 2
-        dl.download_file = Mock(return_value=b'<html><body>Page</body></html>')
+        dl.download_file = Mock(return_value=b"<html><body>Page</body></html>")
         dl._process_html = Mock(return_value=("<html>Page</html>", ["#section"]))
         dl.download()
 
@@ -1613,8 +1618,8 @@ class TestDownloadMain:
 # Config additional coverage
 # ===================================================================
 
-class TestConfigAdditional:
 
+class TestConfigAdditional:
     def teardown_method(self):
         for key in ["WAYBACK_URL", "MAX_FILES", "OPTIMIZE_HTML", "OUTPUT_DIR"]:
             os.environ.pop(key, None)
@@ -1651,8 +1656,8 @@ class TestConfigAdditional:
 # CLI additional coverage
 # ===================================================================
 
-class TestCliAdditional:
 
+class TestCliAdditional:
     def teardown_method(self):
         os.environ.pop("WAYBACK_URL", None)
 
@@ -1667,6 +1672,7 @@ class TestCliAdditional:
 
             with pytest.raises(SystemExit) as exc_info:
                 from wayback_archive.cli import main
+
                 main()
             assert exc_info.value.code == 1
 
@@ -1675,8 +1681,8 @@ class TestCliAdditional:
 # __main__ coverage
 # ===================================================================
 
-class TestMainModule:
 
+class TestMainModule:
     def teardown_method(self):
         os.environ.pop("WAYBACK_URL", None)
 
@@ -1684,9 +1690,11 @@ class TestMainModule:
         """Test __main__.py entry point."""
         os.environ["WAYBACK_URL"] = "https://web.archive.org/web/20250417203037/http://example.com/"
 
-        with patch("wayback_archive.cli.main") as mock_main:
+        with patch("wayback_archive.cli.main"):
             import importlib
+
             import wayback_archive.__main__
+
             importlib.reload(wayback_archive.__main__)
 
 
@@ -1694,8 +1702,8 @@ class TestMainModule:
 # _make_relative_path
 # ===================================================================
 
-class TestMakeRelativePath:
 
+class TestMakeRelativePath:
     def setup_method(self):
         self.dl = _make_downloader()
 
@@ -1723,6 +1731,7 @@ class TestMakeRelativePath:
 # Content type detection in download()
 # ===================================================================
 
+
 class TestContentTypeDetection:
     """Tests for content type detection in the download loop.
 
@@ -1741,10 +1750,7 @@ class TestContentTypeDetection:
         dl.config.base_url = base_url
         dl.download_file = Mock(return_value=content)
         dl.download()
-        return sorted(
-            (p.relative_to(tmp_path).as_posix(), p.read_bytes())
-            for p in tmp_path.rglob("*") if p.is_file()
-        )
+        return sorted((p.relative_to(tmp_path).as_posix(), p.read_bytes()) for p in tmp_path.rglob("*") if p.is_file())
 
     # An extensionless URL is stored under .html whatever it holds, so for
     # these the sniffed type shows only in the bytes: a binary that is taken
@@ -1758,27 +1764,27 @@ class TestContentTypeDetection:
         self._assert_saved_untouched(saved, content)
 
     def test_detects_png_from_content(self, tmp_path):
-        content = b'\x89PNG\r\n\x1a\n' + b'\x00' * 100
+        content = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
         saved = self._run_download_with_content(tmp_path, "http://example.com/image", content)
         self._assert_saved_untouched(saved, content)
 
     def test_detects_jpeg_from_content(self, tmp_path):
-        content = b'\xff\xd8\xff' + b'\x00' * 100
+        content = b"\xff\xd8\xff" + b"\x00" * 100
         saved = self._run_download_with_content(tmp_path, "http://example.com/photo", content)
         self._assert_saved_untouched(saved, content)
 
     def test_detects_gif_from_content(self, tmp_path):
-        content = b'GIF89a' + b'\x00' * 100
+        content = b"GIF89a" + b"\x00" * 100
         saved = self._run_download_with_content(tmp_path, "http://example.com/anim", content)
         self._assert_saved_untouched(saved, content)
 
     def test_detects_webp_from_content(self, tmp_path):
-        content = b'RIFF\x00\x00\x00\x00WEBP' + b'\x00' * 100
+        content = b"RIFF\x00\x00\x00\x00WEBP" + b"\x00" * 100
         saved = self._run_download_with_content(tmp_path, "http://example.com/img", content)
         self._assert_saved_untouched(saved, content)
 
     def test_detects_css_from_url(self, tmp_path):
-        content = b'body { margin: 0; }'
+        content = b"body { margin: 0; }"
         saved = self._run_download_with_content(tmp_path, "http://example.com/styles/main.css", content)
         assert saved == [("styles/main.css", content)]
 
@@ -1793,27 +1799,27 @@ class TestContentTypeDetection:
         assert saved == [("feed.xml", content)]
 
     def test_detects_video_from_url(self, tmp_path):
-        content = b'\x00\x00\x00\x20ftyp' + b'\x00' * 100
+        content = b"\x00\x00\x00\x20ftyp" + b"\x00" * 100
         saved = self._run_download_with_content(tmp_path, "http://example.com/video.mp4", content)
         assert saved == [("video.mp4", content)]
 
     def test_detects_audio_from_url(self, tmp_path):
-        content = b'ID3' + b'\x00' * 100
+        content = b"ID3" + b"\x00" * 100
         saved = self._run_download_with_content(tmp_path, "http://example.com/track.mp3", content)
         assert saved == [("track.mp3", content)]
 
     def test_detects_pdf_from_url(self, tmp_path):
-        content = b'%PDF-1.4' + b'\x00' * 100
+        content = b"%PDF-1.4" + b"\x00" * 100
         saved = self._run_download_with_content(tmp_path, "http://example.com/doc.pdf", content)
         assert saved == [("doc.pdf", content)]
 
     def test_detects_js_mjs_from_url(self, tmp_path):
-        content = b'export default function() {}'
+        content = b"export default function() {}"
         saved = self._run_download_with_content(tmp_path, "http://example.com/module.mjs", content)
         assert saved == [("module.mjs", content)]
 
     def test_detects_font_from_url(self, tmp_path):
-        content = b'wOF2' + b'\x00' * 100
+        content = b"wOF2" + b"\x00" * 100
         saved = self._run_download_with_content(tmp_path, "http://example.com/font.woff2", content)
         assert saved == [("font.woff2", content)]
 
@@ -1821,9 +1827,8 @@ class TestContentTypeDetection:
         """CSS content starting with @charset should be detected: it goes
         through the CSS path (charset rewritten to the UTF-8 it is saved as),
         not the HTML one (which would wrap it in <body>)."""
-        saved = self._run_download_with_content(tmp_path,
-            "http://example.com/mysterious",
-            b'@charset "UTF-8"; body { margin: 0; }'
+        saved = self._run_download_with_content(
+            tmp_path, "http://example.com/mysterious", b'@charset "UTF-8"; body { margin: 0; }'
         )
         assert [data for _, data in saved] == [b'@charset "utf-8"; body { margin: 0; }']
 
@@ -1832,7 +1837,7 @@ class TestContentTypeDetection:
         dl = _make_downloader()
         dl.config.output_dir = str(tmp_path)
         dl.config.max_files = 1
-        content = b'<html><body>Test</body></html>'
+        content = b"<html><body>Test</body></html>"
         dl.download_file = Mock(return_value=content)
         dl._process_html = Mock(side_effect=Exception("parse error"))
         dl.download()
@@ -1846,9 +1851,11 @@ class TestContentTypeDetection:
         html_content = b'<html><body><div style="background-image: url(https://images.squarespace-cdn.com/content/bg.jpg)">Content</div></body></html>'
         dl.download_file = Mock(return_value=html_content)
         original_process = dl._process_html
+
         def limited_process(html, base_url):
             result_html, _ = original_process(html, base_url)
             return result_html, []
+
         dl._process_html = limited_process
         dl.download()
         saved = (tmp_path / "index.html").read_text()
@@ -1860,37 +1867,42 @@ class TestContentTypeDetection:
 # get_bool_env / get_str_env
 # ===================================================================
 
-class TestEnvHelpers:
 
+class TestEnvHelpers:
     def teardown_method(self):
         for k in ["TEST_BOOL", "TEST_STR"]:
             os.environ.pop(k, None)
 
     def test_get_bool_env_true_values(self):
         from wayback_archive.config import get_bool_env
+
         for val in ["true", "1", "yes", "on", "TRUE", "True", "YES"]:
             os.environ["TEST_BOOL"] = val
             assert get_bool_env("TEST_BOOL") is True
 
     def test_get_bool_env_false_values(self):
         from wayback_archive.config import get_bool_env
+
         for val in ["false", "0", "no", "off", "random"]:
             os.environ["TEST_BOOL"] = val
             assert get_bool_env("TEST_BOOL") is False
 
     def test_get_bool_env_default(self):
         from wayback_archive.config import get_bool_env
+
         os.environ.pop("TEST_BOOL", None)
         assert get_bool_env("TEST_BOOL", True) is True
         assert get_bool_env("TEST_BOOL", False) is False
 
     def test_get_str_env_with_value(self):
         from wayback_archive.config import get_str_env
+
         os.environ["TEST_STR"] = "hello"
         assert get_str_env("TEST_STR") == "hello"
 
     def test_get_str_env_default(self):
         from wayback_archive.config import get_str_env
+
         os.environ.pop("TEST_STR", None)
         assert get_str_env("TEST_STR", "default") == "default"
         assert get_str_env("TEST_STR") is None
@@ -1900,8 +1912,8 @@ class TestEnvHelpers:
 # Edge cases for _process_html
 # ===================================================================
 
-class TestProcessHtmlEdgeCases:
 
+class TestProcessHtmlEdgeCases:
     def setup_method(self):
         self.dl = _make_downloader()
 

@@ -1,7 +1,7 @@
 """Tests for configuration module."""
 
 import os
-import pytest
+
 from wayback_archive.config import Config
 
 
@@ -12,7 +12,7 @@ class TestConfig:
         """Test default configuration values."""
         os.environ.pop("WAYBACK_URL", None)
         config = Config()
-        
+
         assert config.optimize_html is True
         assert config.optimize_images is False
         assert config.minify_js is False
@@ -61,7 +61,7 @@ class TestConfig:
         """Test validation with missing URL."""
         os.environ.pop("WAYBACK_URL", None)
         config = Config()
-        
+
         is_valid, error = config.validate()
         assert is_valid is False
         assert "WAYBACK_URL" in error
@@ -70,12 +70,10 @@ class TestConfig:
         """Test validation with URL."""
         os.environ["WAYBACK_URL"] = "https://web.archive.org/web/20250417203037/http://example.com/"
         config = Config()
-        
+
         is_valid, error = config.validate()
         assert is_valid is True
         assert error is None
 
         # Cleanup
         os.environ.pop("WAYBACK_URL", None)
-
-

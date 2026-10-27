@@ -1,7 +1,6 @@
 """Configuration management for Wayback-Archive."""
 
 import os
-from typing import Optional, Tuple
 
 
 def get_bool_env(key: str, default: bool = False) -> bool:
@@ -10,7 +9,7 @@ def get_bool_env(key: str, default: bool = False) -> bool:
     return value in ("true", "1", "yes", "on") if value else default
 
 
-def get_str_env(key: str, default: Optional[str] = None) -> Optional[str]:
+def get_str_env(key: str, default: str | None = None) -> str | None:
     """Get string environment variable."""
     return os.getenv(key, default)
 
@@ -20,7 +19,7 @@ class Config:
 
     def __init__(self):
         # Required
-        self.wayback_url: Optional[str] = get_str_env("WAYBACK_URL")
+        self.wayback_url: str | None = get_str_env("WAYBACK_URL")
 
         # Output
         self.output_dir: str = get_str_env("OUTPUT_DIR", "./output")
@@ -42,12 +41,8 @@ class Config:
         self.remove_external_iframes: bool = get_bool_env("REMOVE_EXTERNAL_IFRAMES", False)
 
         # External links handling
-        self.remove_external_links_keep_anchors: bool = get_bool_env(
-            "REMOVE_EXTERNAL_LINKS_KEEP_ANCHORS", True
-        )
-        self.remove_external_links_remove_anchors: bool = get_bool_env(
-            "REMOVE_EXTERNAL_LINKS_REMOVE_ANCHORS", False
-        )
+        self.remove_external_links_keep_anchors: bool = get_bool_env("REMOVE_EXTERNAL_LINKS_KEEP_ANCHORS", True)
+        self.remove_external_links_remove_anchors: bool = get_bool_env("REMOVE_EXTERNAL_LINKS_REMOVE_ANCHORS", False)
 
         # Link conversion
         self.make_internal_links_relative: bool = get_bool_env("MAKE_INTERNAL_LINKS_RELATIVE", True)
@@ -61,8 +56,8 @@ class Config:
         # Download limit (for testing): how many files to try. Unset or
         # empty means unlimited; anything but a positive integer is an error.
         max_files_str = (get_str_env("MAX_FILES") or "").strip()
-        self.max_files: Optional[int] = None
-        self.max_files_error: Optional[str] = None
+        self.max_files: int | None = None
+        self.max_files_error: str | None = None
         if max_files_str:
             if max_files_str.isascii() and max_files_str.isdigit() and int(max_files_str) > 0:
                 self.max_files = int(max_files_str)
@@ -70,12 +65,12 @@ class Config:
                 self.max_files_error = f"MAX_FILES must be a positive whole number, got {max_files_str!r}"
 
         # Internal state
-        self.base_url: Optional[str] = None
-        self.domain: Optional[str] = None
+        self.base_url: str | None = None
+        self.domain: str | None = None
         self.visited_urls: set = set()
         self.downloaded_files: dict = {}  # URL -> local path mapping
 
-    def validate(self) -> tuple[bool, Optional[str]]:
+    def validate(self) -> tuple[bool, str | None]:
         """Validate configuration."""
         if not self.wayback_url:
             return False, "WAYBACK_URL environment variable is required"
@@ -86,4 +81,3 @@ class Config:
     def __repr__(self) -> str:
         """String representation of config."""
         return f"Config(wayback_url={self.wayback_url}, output_dir={self.output_dir})"
-

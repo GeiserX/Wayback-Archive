@@ -39,7 +39,8 @@ def test_runs_when_a_release_is_published():
 
 def test_tag_must_match_the_package_version_before_building():
     steps = _steps(RELEASE.read_text())
-    check = next(i for i, step in enumerate(steps)
-                 if "wayback_archive.__version__" in step and "GITHUB_REF_NAME" in step)
+    check = next(
+        i for i, step in enumerate(steps) if "wayback_archive.__version__" in step and "GITHUB_REF_NAME" in step
+    )
     build = next(i for i, step in enumerate(steps) if "name: Build package" in step)
     assert check < build

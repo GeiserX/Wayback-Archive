@@ -38,12 +38,13 @@ jobs:
         pip install -r config/requirements.txt
         pip install -r config/requirements-dev.txt
 
-    # Syntax errors and undefined names only. mypy and black used to run here
-    # with their exit code discarded, so they could never fail; they come back
-    # when the code passes them.
-    - name: Lint with flake8
+    # ruff replaces flake8 and black: the rules live in pyproject.toml, and a
+    # file that is not formatted fails the build. mypy comes back when the
+    # code passes it.
+    - name: Lint and check formatting with ruff
       run: |
-        flake8 wayback_archive tests --count --select=E9,F63,F7,F82 --show-source --statistics
+        ruff check wayback_archive tests
+        ruff format --check wayback_archive tests
 
     - name: Test with pytest
       run: |

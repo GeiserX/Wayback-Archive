@@ -14,6 +14,7 @@ from unittest.mock import Mock
 from urllib.parse import urlparse
 
 import pytest
+
 from wayback_archive.config import Config
 from wayback_archive.downloader import WaybackDownloader
 
@@ -24,9 +25,7 @@ _COLON = ":"
 
 def _make_downloader(wayback_url=None, output_dir=None):
     """Create a downloader with a clean environment."""
-    os.environ["WAYBACK_URL"] = (
-        wayback_url or "https://web.archive.org/web/20200101000000/http://example.com/"
-    )
+    os.environ["WAYBACK_URL"] = wayback_url or "https://web.archive.org/web/20200101000000/http://example.com/"
     config = Config()
     if output_dir is not None:
         config.output_dir = str(output_dir)
@@ -124,9 +123,7 @@ class TestWwwIsAPrefixNotACharacterSet:
         assert _make_downloader()._is_internal_url("http://www.example.com/a.png") is True
 
     def test_base_domain_starting_with_w(self):
-        dl = _make_downloader(
-            "https://web.archive.org/web/20200101000000/http://wiki.example.com/"
-        )
+        dl = _make_downloader("https://web.archive.org/web/20200101000000/http://wiki.example.com/")
         assert dl._is_internal_url("http://wiki.example.com/x") is True
         assert dl._is_internal_url("http://www.wiki.example.com/x") is True
         assert dl._is_internal_url("http://iki.example.com/x") is False
@@ -134,20 +131,12 @@ class TestWwwIsAPrefixNotACharacterSet:
     def test_normalize_keeps_the_scheme_of_a_foreign_host(self):
         """Only an internal URL takes the base URL's scheme."""
         dl = _make_downloader()
-        assert (
-            dl._normalize_url("https://wexample.com/a", "http://example.com/")
-            == "https://wexample.com/a"
-        )
-        assert (
-            dl._normalize_url("https://example.com/a", "http://example.com/")
-            == "http://example.com/a"
-        )
+        assert dl._normalize_url("https://wexample.com/a", "http://example.com/") == "https://wexample.com/a"
+        assert dl._normalize_url("https://example.com/a", "http://example.com/") == "http://example.com/a"
 
     def test_lookalike_link_is_not_rewritten_to_the_home_page(self):
         dl = _make_downloader()
-        html, links = dl._process_html(
-            '<a href="https://wexample.com/">other site</a>', "http://example.com/"
-        )
+        html, links = dl._process_html('<a href="https://wexample.com/">other site</a>', "http://example.com/")
         assert "index.html" not in html
         assert links == []
 
@@ -222,11 +211,7 @@ class _FakeSession:
         return _Response(self.live_status, b"LIVE:" + url.encode())
 
     def live_calls(self):
-        return [
-            (url, kwargs)
-            for url, kwargs in self.calls
-            if urlparse(url).hostname != "web.archive.org"
-        ]
+        return [(url, kwargs) for url, kwargs in self.calls if urlparse(url).hostname != "web.archive.org"]
 
 
 class TestLiveFallbackIsCdnOnly:
@@ -244,7 +229,9 @@ class TestLiveFallbackIsCdnOnly:
         b"</head><body>"
         b'<a href="http://example.com/contact.php">c</a>'
         b'<img src="http://web.archive.org@10.0.0.1/x.png">'
-        b'<img src="/web/20200101000000im_/http://web.archive.org' + _COLON.encode() + b'sqspcdn.com@169.254.169.254/meta">'
+        b'<img src="/web/20200101000000im_/http://web.archive.org'
+        + _COLON.encode()
+        + b'sqspcdn.com@169.254.169.254/meta">'
         b'<script src="http://sqspcdn.com@169.254.169.254/latest/user-data"></script>'
         b'<img src="http://wexample.com/a.png">'
         b'<img src="https://static1.squarespace.com/static/logo.png">'
@@ -351,9 +338,7 @@ class TestFontCleanupKeepsTheRestOfTheCss:
         dl = _make_downloader()
         dl.corrupted_fonts.add("http://example.com/fonts/my.woff2")
         result = dl._remove_corrupted_fonts_from_css(REWRITTEN_CSS)
-        assert result == REWRITTEN_CSS.replace(
-            'src:url(../fonts/my.woff2) format("woff2"),', "src:"
-        )
+        assert result == REWRITTEN_CSS.replace('src:url(../fonts/my.woff2) format("woff2"),', "src:")
 
     def test_corrupted_font_matches_the_whole_file_name(self):
         dl = _make_downloader()
@@ -365,18 +350,12 @@ class TestFontCleanupKeepsTheRestOfTheCss:
         dl = _make_downloader()
         dl.corrupted_fonts.add("http://example.com/fonts/x.woff2")
         css = "@font-face{src:url(/fonts/x.woff2?v=3) format('woff2'),url(/fonts/x.woff) format('woff')}"
-        assert dl._remove_corrupted_fonts_from_css(css) == (
-            "@font-face{src:url(/fonts/x.woff) format('woff')}"
-        )
+        assert dl._remove_corrupted_fonts_from_css(css) == ("@font-face{src:url(/fonts/x.woff) format('woff')}")
 
     def test_removed_font_takes_its_format_with_it(self):
         dl = _make_downloader()
-        dl.corrupted_fonts.add(
-            "http://example.com/fonts/glyphicons-halflings-regular.woff2"
-        )
-        result = dl._remove_legacy_font_formats_from_css(
-            dl._remove_corrupted_fonts_from_css(GLYPHICONS)
-        )
+        dl.corrupted_fonts.add("http://example.com/fonts/glyphicons-halflings-regular.woff2")
+        result = dl._remove_legacy_font_formats_from_css(dl._remove_corrupted_fonts_from_css(GLYPHICONS))
         assert ", format(" not in result
         assert "format('woff2')" not in result
         assert "url(../fonts/glyphicons-halflings-regular.woff) format('woff')" in result
@@ -390,6 +369,7 @@ class TestFontCleanupKeepsTheRestOfTheCss:
         each url( it tries, which is quadratic and swallows neighbouring rules.
         """
         import re as real_re
+
         import wayback_archive.downloader as module
 
         seen = []
@@ -439,9 +419,7 @@ class TestFontProbe:
     def _downloader(self):
         dl = _make_downloader()
         dl.session = _FakeSession({})
-        dl.session.get = lambda url, **kw: (
-            dl.session.calls.append((url, kw)) or _Response(200, b"wOF2" + b"\0" * 100)
-        )
+        dl.session.get = lambda url, **kw: dl.session.calls.append((url, kw)) or _Response(200, b"wOF2" + b"\0" * 100)
         return dl
 
     def test_each_unquoted_font_is_probed_on_its_own(self):
@@ -483,9 +461,7 @@ class TestFontProbe:
         saved = (output_dir / "s.css").read_text()
         assert "x.woff2" not in saved
         assert "p{color:red}" in saved
-        assert not any(
-            "example.com/fonts.gstatic.com" in url for url, _ in dl.session.calls
-        )
+        assert not any("example.com/fonts.gstatic.com" in url for url, _ in dl.session.calls)
 
 
 class TestGoogleFontsIsAHostMatch:
@@ -513,19 +489,14 @@ class TestGoogleFontsIsAHostMatch:
         ],
     )
     def test_foreign_stylesheet_is_not_queued_as_google_fonts(self, tmp_path, href):
-        page = (
-            b'<html><head><link rel="stylesheet" href="' + href.encode() + b'">'
-            b"</head><body></body></html>"
-        )
+        page = b'<html><head><link rel="stylesheet" href="' + href.encode() + b'"></head><body></body></html>'
         session, files = self._run(tmp_path, page)
         assert not any("evil.test" in url for url, _ in session.calls)
         assert not any(f.startswith("fonts.googleapis.com") for f in files)
 
     def test_site_stylesheet_mentioning_google_fonts_keeps_its_own_fonts(self):
         dl = _make_downloader()
-        css = dl._rewrite_css_urls(
-            "a{src:url(/s/x.woff2)}", "http://example.com/s.css?fonts.googleapis.com"
-        )
+        css = dl._rewrite_css_urls("a{src:url(/s/x.woff2)}", "http://example.com/s.css?fonts.googleapis.com")
         assert "fonts.gstatic.com" not in css
 
     def test_foreign_url_mentioning_gstatic_is_not_made_local(self):
@@ -546,16 +517,11 @@ class TestGoogleFontsIsAHostMatch:
     def test_missing_google_fonts_stylesheet_is_fetched_live(self, tmp_path, href):
         """The stylesheet has no extension, so it was taken for a page, and a
         page is never fetched live."""
-        page = (
-            b'<html><head><link rel="stylesheet" href="' + href.encode() + b'">'
-            b"</head><body></body></html>"
-        )
+        page = b'<html><head><link rel="stylesheet" href="' + href.encode() + b'"></head><body></body></html>'
         session, files = self._run(tmp_path, page)
         live = [url for url, _ in session.live_calls()]
-        assert live == [href[href.index("https://"):]]
-        assert any(
-            f.startswith("fonts.googleapis.com/css-") and f.endswith(".css") for f in files
-        )
+        assert live == [href[href.index("https://") :]]
+        assert any(f.startswith("fonts.googleapis.com/css-") and f.endswith(".css") for f in files)
         assert not any("if_/https://fonts.googleapis.com" in url for url, _ in session.calls)
 
 

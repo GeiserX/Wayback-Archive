@@ -2,21 +2,21 @@
 
 import codecs
 import hashlib
+import mimetypes
 import os
 import posixpath
 import re
-import sys
-import mimetypes
 from datetime import datetime, timedelta
-from urllib.parse import urljoin, urlparse, unquote, quote
 from pathlib import Path
-from typing import Optional, Set, Dict, List, Tuple
+from urllib.parse import quote, unquote, urljoin, urlparse
+
 import requests
+from bs4 import BeautifulSoup, Comment
+from bs4.dammit import EncodingDetector
 from requests.adapters import HTTPAdapter
 from urllib3.exceptions import MaxRetryError
 from urllib3.util.retry import Retry
-from bs4 import BeautifulSoup, Comment
-from bs4.dammit import EncodingDetector
+
 from wayback_archive.config import Config
 
 
@@ -134,50 +134,63 @@ class WaybackDownloader:
     # produced, so it is fetched as a page and stored with .html appended
     # (index.php -> index.php.html): a static server then sends it as HTML,
     # and /index.php can sit next to an /index.php/ directory.
-    PAGE_EXTENSIONS = frozenset(
-        {".php", ".asp", ".aspx", ".jsp", ".cfm", ".cgi", ".pl", ".shtml", ".phtml"}
-    )
+    PAGE_EXTENSIONS = frozenset({".php", ".asp", ".aspx", ".jsp", ".cfm", ".cgi", ".pl", ".shtml", ".phtml"})
 
     # References that name no file to fetch.
     NON_FETCHABLE_PREFIXES = (
-        "data:", "javascript:", "vbscript:", "mailto:", "tel:", "sms:",
-        "whatsapp:", "callto:", "about:", "blob:",
+        "data:",
+        "javascript:",
+        "vbscript:",
+        "mailto:",
+        "tel:",
+        "sms:",
+        "whatsapp:",
+        "callto:",
+        "about:",
+        "blob:",
     )
 
     def __init__(self, config: Config):
         """Initialize downloader with configuration."""
         self.config = config
         self.session = requests.Session()
-        self.session.headers.update(
-            {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-            }
-        )
+        self.session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
         # Wayback throttles with 429: wait and retry a few times. A 5xx, or
         # an archived 429, is not retried, since Wayback replays archived
         # error captures as such.
-        self.session.mount("https://web.archive.org/", HTTPAdapter(max_retries=_PoliteRetry(
-            total=3, connect=0, read=0, other=0, status_forcelist=[429],
-            backoff_factor=2, respect_retry_after_header=True, raise_on_status=False,
-        )))
+        self.session.mount(
+            "https://web.archive.org/",
+            HTTPAdapter(
+                max_retries=_PoliteRetry(
+                    total=3,
+                    connect=0,
+                    read=0,
+                    other=0,
+                    status_forcelist=[429],
+                    backoff_factor=2,
+                    respect_retry_after_header=True,
+                    raise_on_status=False,
+                )
+            ),
+        )
         # Why the last download_file call failed when Wayback refused it:
         # "throttled" (429) or "connection" (no answer); None otherwise.
-        self._last_failure: Optional[str] = None
+        self._last_failure: str | None = None
         # Track corrupted font files (HTML error pages instead of actual fonts)
-        self.corrupted_fonts: Set[str] = set()
+        self.corrupted_fonts: set[str] = set()
         # Font URLs already probed this run, so each is fetched at most once
         # however many stylesheets name it.
-        self._probed_fonts: Set[str] = set()
+        self._probed_fonts: set[str] = set()
         # How each stored path was first referenced, so the extension a URL
         # gets is decided once and every later lookup agrees with it.
-        self._path_kinds: Dict[str, str] = {}
+        self._path_kinds: dict[str, str] = {}
         # The same answer keyed by the file finally written, so the download
         # loop can tell a stylesheet from a page when the URL cannot.
-        self._kind_by_path: Dict[str, str] = {}
+        self._kind_by_path: dict[str, str] = {}
         # Charset named by the last response download_file read.
-        self._last_charset: Optional[str] = None
+        self._last_charset: str | None = None
         # The URL that response finally came from, after redirects.
-        self._last_final_url: Optional[str] = None
+        self._last_final_url: str | None = None
         # CDX lookups for bad captures: how many this run, and how many
         # failed in a row. CDX is slow and often down, so both are capped.
         self._cdx_lookups = 0
@@ -212,11 +225,11 @@ class WaybackDownloader:
             # timestamp (a year, a year and month) is valid Wayback input and
             # means the start of that period, so pad it with the earliest
             # valid month, day and time rather than zeros.
-            padded = timestamp[:14] + "00000101000000"[len(timestamp[:14]):]
+            padded = timestamp[:14] + "00000101000000"[len(timestamp[:14]) :]
             try:
                 if len(timestamp) < 4:
                     raise ValueError(timestamp)
-                self.original_datetime = datetime.strptime(padded, '%Y%m%d%H%M%S')
+                self.original_datetime = datetime.strptime(padded, "%Y%m%d%H%M%S")
             except ValueError:
                 # Not a date (/web/2/, /web/99999999999999/): Wayback serves
                 # the latest capture, so search around now.
@@ -237,24 +250,31 @@ class WaybackDownloader:
 
     def _is_internal_url(self, url: str) -> bool:
         """Check if URL is internal to the site.
-        
+
         Returns False for special schemes (tel:, mailto:, javascript:, etc.)
         """
         # Skip special URL schemes that shouldn't be downloaded
         non_downloadable_schemes = (
-            'tel:', 'mailto:', 'javascript:', 'data:', 
-            'ftp:', 'file:', 'sms:', 'whatsapp:', '#'
+            "tel:",
+            "mailto:",
+            "javascript:",
+            "data:",
+            "ftp:",
+            "file:",
+            "sms:",
+            "whatsapp:",
+            "#",
         )
         url_lower = url.lower().strip()
-        if url_lower.startswith(non_downloadable_schemes) or url_lower == '#':
+        if url_lower.startswith(non_downloadable_schemes) or url_lower == "#":
             return False
-        
+
         parsed = urlparse(url)
-        
+
         # Also check the parsed scheme
-        if parsed.scheme and parsed.scheme.lower() not in ('http', 'https', ''):
+        if parsed.scheme and parsed.scheme.lower() not in ("http", "https", ""):
             return False
-        
+
         url_domain = self._strip_default_port(parsed.netloc.lower(), parsed.scheme).removeprefix("www.")
         base_domain = self.config.domain.lower().removeprefix("www.")
 
@@ -280,19 +300,35 @@ class WaybackDownloader:
         path_lower = parsed.path.lower()
         if not path_lower or path_lower == "/":
             return True
-        if path_lower.endswith('.html') or path_lower.endswith('.htm'):
+        if path_lower.endswith(".html") or path_lower.endswith(".htm"):
             return True
         ext = os.path.splitext(path_lower)[1]
         if ext in WaybackDownloader.PAGE_EXTENSIONS:
             return True
         if ext:
             return False
-        non_html = {'.css', '.js', '.jpg', '.jpeg', '.png', '.gif', '.svg',
-                    '.woff', '.woff2', '.ttf', '.eot', '.otf', '.ico',
-                    '.json', '.xml', '.txt', '.pdf'}
+        non_html = {
+            ".css",
+            ".js",
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".gif",
+            ".svg",
+            ".woff",
+            ".woff2",
+            ".ttf",
+            ".eot",
+            ".otf",
+            ".ico",
+            ".json",
+            ".xml",
+            ".txt",
+            ".pdf",
+        }
         return not any(path_lower.endswith(e) for e in non_html)
 
-    def _third_party_parts(self, url: str) -> Optional[Tuple[str, str]]:
+    def _third_party_parts(self, url: str) -> tuple[str, str] | None:
         """(host, path) of a URL on another host, None for the site's own."""
         url = self._extract_original_url_from_path(url) or url
         parsed = urlparse("https:" + url if url.startswith("//") else url)
@@ -348,13 +384,13 @@ class WaybackDownloader:
 
     def _convert_to_wayback_url(self, url: str) -> str:
         """Convert a regular URL to a Wayback Machine URL.
-        
+
         This method is kept for backward compatibility.
         For timeframe fallback, use _convert_to_wayback_url_with_timestamp().
         """
         return self._convert_to_wayback_url_with_timestamp(url)
-    
-    def _referenced_kind(self, url: str) -> Optional[str]:
+
+    def _referenced_kind(self, url: str) -> str | None:
         """
         What a URL was referenced as, if anything recorded it.
 
@@ -371,27 +407,23 @@ class WaybackDownloader:
 
     def _convert_to_wayback_url_with_timestamp(self, url: str, timestamp: str = None, use_iframe: bool = False) -> str:
         """Convert a regular URL to a Wayback Machine URL with optional timestamp.
-        
+
         Args:
             url: The original URL
             timestamp: Optional timestamp (YYYYMMDDHHMMSS). If None, uses original timestamp.
             use_iframe: If True, use 'if_' prefix to get unwrapped HTML content (no Wayback interface)
         """
         parsed = urlparse(url)
-        if (
-            parsed.scheme in ("http", "https")
-            and parsed.hostname == "web.archive.org"
-            and "@" not in parsed.netloc
-        ):
+        if parsed.scheme in ("http", "https") and parsed.hostname == "web.archive.org" and "@" not in parsed.netloc:
             return url
-        
+
         if timestamp is None:
             timestamp = self.original_timestamp
-        
+
         # For HTML pages, use 'if_' prefix to get unwrapped content (no Wayback interface)
         if use_iframe:
             return f"https://web.archive.org/web/{timestamp}if_/{url}"
-        
+
         # Determine asset type prefix (im_, cs_, js_)
         path = parsed.path.lower()
         asset_prefix = ""
@@ -416,7 +448,7 @@ class WaybackDownloader:
             asset_prefix = "cs_"
         elif ext in (".js", ".mjs"):
             asset_prefix = "js_"
-        
+
         if asset_prefix:
             return f"https://web.archive.org/web/{timestamp}{asset_prefix}/{url}"
         return f"https://web.archive.org/web/{timestamp}/{url}"
@@ -427,41 +459,43 @@ class WaybackDownloader:
         # attributes do, so they go through the same builder.
         return self._get_relative_link_path(url, kind)
 
-    def _extract_original_url_from_path(self, path: str) -> Optional[str]:
+    def _extract_original_url_from_path(self, path: str) -> str | None:
         """Extract original URL from Wayback Machine path in HTML."""
         if not path or not isinstance(path, str):
             return None
-        
+
         try:
             # Handle protocol-relative URLs: //web.archive.org/web/...
             if path.startswith("//"):
                 path = "https:" + path
-            
+
             # Pattern: /web/TIMESTAMP/https://original.com/path and replay variants
             # such as im_, cs_, js_, jm_, if_, and fw_.
             wayback_url_pattern = r"(?:https?://web\.archive\.org)?/web/\d+(?:[a-z]+_)?/(https?://[^\"\s'<>]+)"
             match = re.search(wayback_url_pattern, path)
             if match:
                 extracted = match.group(1)
-                extracted = extracted.rstrip('.,;:\'"')
+                extracted = extracted.rstrip(".,;:'\"")
                 # A ")" belongs to the URL when it closes a "(" inside it
                 # (File_(2).png); an unmatched one closes a url(...) wrapper.
                 while extracted.endswith(")") and extracted.count(")") > extracted.count("("):
-                    extracted = extracted[:-1].rstrip('.,;:\'"')
+                    extracted = extracted[:-1].rstrip(".,;:'\"")
                 return extracted
-            
+
             # Pattern for mailto:/tel:/whatsapp: in wayback URLs
             # Handle both /web/... and https://web.archive.org/web/...
-            wayback_protocol_pattern = r"(?:https?://web\.archive\.org)?/web/\d+[a-z]*/(mailto:|tel:|whatsapp:|sms:|callto:)(.+)"
+            wayback_protocol_pattern = (
+                r"(?:https?://web\.archive\.org)?/web/\d+[a-z]*/(mailto:|tel:|whatsapp:|sms:|callto:)(.+)"
+            )
             match = re.search(wayback_protocol_pattern, path)
             if match:
                 protocol = match.group(1)
                 rest = match.group(2).split("?")[0].split("&")[0]  # Remove query params
                 return protocol + rest
-        except Exception as e:
+        except Exception:
             # Silently fail - return None if extraction fails
             pass
-        
+
         return None
 
     def _normalize_url(self, url: str, base_url: str) -> str:
@@ -497,7 +531,7 @@ class WaybackDownloader:
 
         parsed = urlparse(url)
         parsed_base = urlparse(base_url)
-        
+
         # For internal URLs, preserve the scheme from base_url to ensure consistency
         # This prevents http:// URLs from being converted to https://
         url_domain = self._strip_default_port(parsed.netloc.lower(), parsed.scheme).removeprefix("www.")
@@ -554,7 +588,7 @@ class WaybackDownloader:
         # Windows. splitdrive is a no-op on POSIX.
         path = os.path.splitdrive(path)[1]
 
-        segments: List[str] = []
+        segments: list[str] = []
         for segment in self._PATH_SEPARATORS.split(path):
             # NUL is not writable in a filename and would raise on open().
             segment = segment.replace("\x00", "")
@@ -608,9 +642,7 @@ class WaybackDownloader:
             # The download loop will refuse this URL as well; nothing to note.
             pass
 
-    def _place_in_output(
-        self, path: str, kind: Optional[str], default_extension: str
-    ) -> Path:
+    def _place_in_output(self, path: str, kind: str | None, default_extension: str) -> Path:
         """
         Resolve a URL-derived path inside output_dir, naming it by its kind.
 
@@ -669,13 +701,11 @@ class WaybackDownloader:
         root = os.path.realpath(output_dir)
         resolved = os.path.realpath(candidate)
         if resolved != root and not resolved.startswith(root + os.sep):
-            raise UnsafeOutputPathError(
-                f"refusing to write outside output directory: {candidate}"
-            )
+            raise UnsafeOutputPathError(f"refusing to write outside output directory: {candidate}")
 
         return candidate
 
-    def _get_local_path(self, url: str, kind: Optional[str] = None) -> Path:
+    def _get_local_path(self, url: str, kind: str | None = None) -> Path:
         """
         Get local file path for a URL.
         This ensures consistent file naming that works with static file servers.
@@ -693,7 +723,7 @@ class WaybackDownloader:
             UnsafeOutputPathError: If the URL resolves outside output_dir.
         """
         parsed = urlparse(url)
-        
+
         # A Google Fonts stylesheet is chosen by its query (?family=...), so
         # the query is part of its name: one file per family set.
         if self._is_google_fonts_css(url):
@@ -711,7 +741,7 @@ class WaybackDownloader:
             # Default to no extension: these paths are stored verbatim, and
             # only a known stylesheet or script earns one.
             return self._place_in_output(domain_path, kind, "")
-        
+
         # Special handling for Squarespace CDN - preserve domain structure
         # This prevents CDN root URLs from overwriting index.html
         if self._is_squarespace_cdn(url):
@@ -723,7 +753,7 @@ class WaybackDownloader:
             if not parsed.path or parsed.path == "/":
                 domain_path = f"{parsed.netloc}/index.html"
             return self._place_in_output(domain_path, kind, "")
-        
+
         path = unquote(parsed.path)
 
         # A trailing slash means a directory; record it before dot-segment
@@ -743,7 +773,7 @@ class WaybackDownloader:
         # A path with no extension is treated as a page unless the reference
         # said otherwise.
         return self._place_in_output(path, kind, self.DEFAULT_EXTENSION)
-    
+
     def _output_relative_url(self, path: Path) -> str:
         """
         Express a path inside output_dir as a root-relative URL path.
@@ -788,16 +818,14 @@ class WaybackDownloader:
         # Hop from the directory holding the page that carries the link.
         current_url = getattr(self, "_current_page_url", None)
         if current_url:
-            from_dir = self._output_relative_url(
-                self._get_local_path(current_url).parent
-            )
+            from_dir = self._output_relative_url(self._get_local_path(current_url).parent)
             path = posixpath.relpath(path, from_dir)
 
         return self._encode_link_path(path) + suffix
 
     def _to_relative_path(self, abs_path: str) -> str:
         """Convert a root-absolute path to one relative to the current page."""
-        current_url = getattr(self, '_current_page_url', None)
+        current_url = getattr(self, "_current_page_url", None)
         if not current_url or not abs_path.startswith("/"):
             return abs_path
         from_parsed = urlparse(current_url)
@@ -814,10 +842,10 @@ class WaybackDownloader:
     # different nearest capture can find the file.
     FALLBACK_OFFSETS_HOURS = (-24, 24, -168)
 
-    def _fallback_timestamps(self) -> List[str]:
+    def _fallback_timestamps(self) -> list[str]:
         """The distinct timestamps to try after a 404, closest first."""
         timestamps = (
-            (self.original_datetime + timedelta(hours=hours)).strftime('%Y%m%d%H%M%S')
+            (self.original_datetime + timedelta(hours=hours)).strftime("%Y%m%d%H%M%S")
             for hours in self.FALLBACK_OFFSETS_HOURS
         )
         return list(dict.fromkeys(timestamps))
@@ -832,7 +860,7 @@ class WaybackDownloader:
         b"<title>Attention Required! | Cloudflare</title>",
     )
 
-    def _bad_capture_reason(self, response) -> Optional[str]:
+    def _bad_capture_reason(self, response) -> str | None:
         """Why an archived answer is not the page, or None when it is.
 
         Wayback replays an archived 403 or 5xx with that status and a
@@ -846,14 +874,11 @@ class WaybackDownloader:
             return "Cloudflare challenge page"
         return None
 
-    def _nearest_good_timestamp(self, url: str, bad_timestamp: str) -> Optional[str]:
+    def _nearest_good_timestamp(self, url: str, bad_timestamp: str) -> str | None:
         """The timestamp of the capture of url with status 200 closest to the
         requested one, other than bad_timestamp, from one CDX query; None when
         there is none or CDX does not answer."""
-        if (
-            self._cdx_lookups >= self.CDX_MAX_LOOKUPS
-            or self._cdx_failures >= self.CDX_MAX_CONSECUTIVE_FAILURES
-        ):
+        if self._cdx_lookups >= self.CDX_MAX_LOOKUPS or self._cdx_failures >= self.CDX_MAX_CONSECUTIVE_FAILURES:
             return None
         self._cdx_lookups += 1
         try:
@@ -864,7 +889,7 @@ class WaybackDownloader:
                     "output": "json",
                     "fl": "timestamp",
                     "filter": "statuscode:200",
-                    "closest": self.original_datetime.strftime('%Y%m%d%H%M%S'),
+                    "closest": self.original_datetime.strftime("%Y%m%d%H%M%S"),
                     "sort": "closest",
                     # A challenge archived as 200 passes the filter, so the
                     # closest row can be the bad capture itself.
@@ -877,9 +902,13 @@ class WaybackDownloader:
             rows = response.json()
         except Exception:
             self._cdx_failures += 1
-            print("         ⚠️  The Wayback CDX index did not answer, so no other capture could be looked up", flush=True)
+            print(
+                "         ⚠️  The Wayback CDX index did not answer, so no other capture could be looked up", flush=True
+            )
             if self._cdx_failures == self.CDX_MAX_CONSECUTIVE_FAILURES:
-                print("         ⚠️  The Wayback CDX index is not answering; no more capture lookups this run", flush=True)
+                print(
+                    "         ⚠️  The Wayback CDX index is not answering; no more capture lookups this run", flush=True
+                )
             return None
         self._cdx_failures = 0
         for row in rows[1:]:
@@ -888,12 +917,12 @@ class WaybackDownloader:
         print("         ⚠️  No good capture found", flush=True)
         return None
 
-    def _fetch_nearest_good_capture(self, url: str, reason: str, is_html_page: bool, bad_response) -> Optional[bytes]:
+    def _fetch_nearest_good_capture(self, url: str, reason: str, is_html_page: bool, bad_response) -> bytes | None:
         """Replace a bad capture of url with the nearest good one, if any."""
         print(f"         ⚠️  Capture is {reason}; looking for the nearest good one", flush=True)
         # The capture Wayback served, which can differ from the one asked for.
         served = re.search(r"/web/(\d{14})", bad_response.url or "")
-        bad_timestamp = served.group(1) if served else self.original_datetime.strftime('%Y%m%d%H%M%S')
+        bad_timestamp = served.group(1) if served else self.original_datetime.strftime("%Y%m%d%H%M%S")
         timestamp = self._nearest_good_timestamp(url, bad_timestamp)
         if not timestamp:
             return None
@@ -909,31 +938,31 @@ class WaybackDownloader:
             # Assets resolve around the capture actually used.
             print(f"         Requested capture is {reason}; using nearest good capture {timestamp}", flush=True)
             self.original_timestamp = timestamp
-            self.original_datetime = datetime.strptime(timestamp, '%Y%m%d%H%M%S')
+            self.original_datetime = datetime.strptime(timestamp, "%Y%m%d%H%M%S")
         return self._body_of(response)
 
     def _is_corrupted_font(self, content: bytes, url: str) -> bool:
         """Check if a downloaded font file is actually an HTML error page.
-        
+
         Wayback Machine sometimes returns HTML error pages instead of font files.
         This detects those cases.
         """
         # Check if it's a font file extension
-        font_extensions = ('.woff', '.woff2', '.ttf', '.eot', '.otf', '.svg')
+        font_extensions = (".woff", ".woff2", ".ttf", ".eot", ".otf", ".svg")
         if not any(url.lower().endswith(ext) for ext in font_extensions):
             return False
-        
+
         # Check if content starts with HTML (error page)
         # HTML typically starts with <!doctype, <html, or <HTML
         content_start = content[:200].strip()
-        if content_start.startswith((b'<!doctype', b'<!DOCTYPE', b'<html', b'<HTML')):
+        if content_start.startswith((b"<!doctype", b"<!DOCTYPE", b"<html", b"<HTML")):
             return True
-        
+
         return False
-    
-    def download_file(self, url: str) -> Optional[bytes]:
+
+    def download_file(self, url: str) -> bytes | None:
         """Download a file from the given URL with timeframe fallback.
-        
+
         If the file returns 404 at the original timestamp, searches nearby
         timestamps to find when the file was available.
         If all Wayback attempts fail and the URL is on a well-known CDN
@@ -943,7 +972,6 @@ class WaybackDownloader:
         self._last_failure = None
         # Determine if this is an HTML page (we should NOT fallback to live for HTML)
         parsed = urlparse(url)
-        path_lower = parsed.path.lower()
         # A referenced stylesheet or script, or a Google Fonts stylesheet, is
         # never a page, whatever the URL looks like; asking for the iframe view
         # of one returns the Wayback wrapper rather than the file.
@@ -952,15 +980,13 @@ class WaybackDownloader:
             and self._referenced_kind(url) not in ("stylesheet", "script")
             and self._is_html_url(url, parsed)
         )
-        
+
         # For HTML pages, try the 'if_' version first to get unwrapped content
         # This avoids the Wayback Machine interface wrapper
         if is_html_page:
             wayback_url_if = self._convert_to_wayback_url_with_timestamp(url, use_iframe=True)
             try:
-                response = self.session.get(
-                    wayback_url_if, timeout=15, allow_redirects=True
-                )
+                response = self.session.get(wayback_url_if, timeout=15, allow_redirects=True)
                 reason = self._bad_capture_reason(response)
                 if reason:
                     return self._fetch_nearest_good_capture(url, reason, is_html_page, response)
@@ -970,10 +996,10 @@ class WaybackDownloader:
                     return None
                 response.raise_for_status()
                 content = self._body_of(response)
-                
+
                 # Verify it's actually HTML content, not an error page
                 content_start = content[:200].strip()
-                if content_start.startswith((b'<!doctype', b'<!DOCTYPE', b'<html', b'<HTML')):
+                if content_start.startswith((b"<!doctype", b"<!DOCTYPE", b"<html", b"<HTML")):
                     # The if_ version still has Wayback scripts but also contains the actual page
                     # Check if it has actual page content (not just the wrapper interface)
                     try:
@@ -981,10 +1007,13 @@ class WaybackDownloader:
                         # Check if it's ONLY the wrapper (has Wayback Machine title AND no actual page content)
                         # The if_ version will have both Wayback scripts AND the actual page content
                         is_only_wrapper = (
-                            "<title>Wayback Machine</title>" in html_str and
-                            "<!-- This is Squarespace. -->" not in html_str and
-                            "<body" not in html_str.lower() or
-                            (html_str.count("<body") == 0 and "<!-- End Wayback Rewrite JS Include -->" not in html_str)
+                            "<title>Wayback Machine</title>" in html_str
+                            and "<!-- This is Squarespace. -->" not in html_str
+                            and "<body" not in html_str.lower()
+                            or (
+                                html_str.count("<body") == 0
+                                and "<!-- End Wayback Rewrite JS Include -->" not in html_str
+                            )
                         )
                         if not is_only_wrapper:
                             # Got content (even if it has Wayback scripts, it has the actual page)
@@ -998,45 +1027,44 @@ class WaybackDownloader:
             except Exception:
                 # If if_ version fails, fall through to regular download
                 pass
-        
+
         # Try original timestamp first (or fallback from if_)
         wayback_url = self._convert_to_wayback_url_with_timestamp(url)
         try:
-            response = self.session.get(
-                wayback_url, timeout=15, allow_redirects=True
-            )
+            response = self.session.get(wayback_url, timeout=15, allow_redirects=True)
             reason = self._bad_capture_reason(response)
             if reason:
                 return self._fetch_nearest_good_capture(url, reason, is_html_page, response)
             response.raise_for_status()
             content = self._body_of(response)
-            
+
             # Check if font file is corrupted (HTML error page)
             if self._is_corrupted_font(content, url):
                 # Mark as corrupted and don't return it
                 normalized_url = self._normalize_url(url, self.config.base_url)
                 self.corrupted_fonts.add(normalized_url)
-                print(f"         ⚠️  Font file is corrupted (HTML error page) - will be removed from CSS", flush=True)
+                print("         ⚠️  Font file is corrupted (HTML error page) - will be removed from CSS", flush=True)
                 return None
-            
+
             return content
         except requests.exceptions.HTTPError as e:
-            if hasattr(e, 'response') and e.response is not None and e.response.status_code == 404:
+            if hasattr(e, "response") and e.response is not None and e.response.status_code == 404:
                 # File not found at original timestamp, try a few others
                 for timestamp in self._fallback_timestamps():
                     try:
                         variant_url = self._convert_to_wayback_url_with_timestamp(
                             url, timestamp, use_iframe=is_html_page
                         )
-                        variant_response = self.session.get(
-                            variant_url, timeout=10, allow_redirects=True
-                        )
+                        variant_response = self.session.get(variant_url, timeout=10, allow_redirects=True)
                         if variant_response.status_code == 200:
                             content = self._body_of(variant_response)
                             if self._is_corrupted_font(content, url):
                                 normalized_url = self._normalize_url(url, self.config.base_url)
                                 self.corrupted_fonts.add(normalized_url)
-                                print(f"         ⚠️  Font file is corrupted (HTML error page) - will be removed from CSS", flush=True)
+                                print(
+                                    "         ⚠️  Font file is corrupted (HTML error page) - will be removed from CSS",
+                                    flush=True,
+                                )
                                 continue  # Try next timestamp
                             return content
                     except Exception:
@@ -1058,7 +1086,7 @@ class WaybackDownloader:
             self._last_failure = "connection"
         except Exception:
             pass
-        
+
         return None
 
     def _body_of(self, response) -> bytes:
@@ -1069,7 +1097,7 @@ class WaybackDownloader:
         self._last_final_url = getattr(response, "url", None)
         return response.content
 
-    def _decode_text(self, content: bytes, charset: Optional[str] = None, is_html: bool = False) -> str:
+    def _decode_text(self, content: bytes, charset: str | None = None, is_html: bool = False) -> str:
         """
         Decode a page, stylesheet or script without dropping characters.
 
@@ -1129,10 +1157,27 @@ class WaybackDownloader:
         return start.startswith(b"<") or re.search(rb"<(html|head|body)\b", head, re.I) is not None
 
     # Extensions of files that are never an HTML document.
-    ASSET_EXTENSIONS = frozenset({
-        ".jpg", ".jpeg", ".png", ".gif", ".svg", ".webp", ".ico", ".bmp", ".tiff",
-        ".woff", ".woff2", ".ttf", ".eot", ".otf", ".css", ".js", ".mjs",
-    })
+    ASSET_EXTENSIONS = frozenset(
+        {
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".gif",
+            ".svg",
+            ".webp",
+            ".ico",
+            ".bmp",
+            ".tiff",
+            ".woff",
+            ".woff2",
+            ".ttf",
+            ".eot",
+            ".otf",
+            ".css",
+            ".js",
+            ".mjs",
+        }
+    )
 
     def _is_html_instead_of_asset(self, content: bytes, url: str) -> bool:
         """
@@ -1150,7 +1195,7 @@ class WaybackDownloader:
         start = content[:512].lstrip(b"\xef\xbb\xbf \t\r\n").lower()
         return start.startswith((b"<!doctype html", b"<html"))
 
-    def _fetch_from_live_cdn(self, url: str) -> Optional[bytes]:
+    def _fetch_from_live_cdn(self, url: str) -> bytes | None:
         """Fetch a file Wayback does not have, if it lives on a well-known CDN.
 
         Anything not on LIVE_FALLBACK_HOSTS returns None without a request.
@@ -1172,34 +1217,34 @@ class WaybackDownloader:
         if self._is_corrupted_font(content, url):
             normalized_url = self._normalize_url(url, self.config.base_url)
             self.corrupted_fonts.add(normalized_url)
-            print(f"         ⚠️  Font file is corrupted (HTML error page) - will be removed from CSS", flush=True)
+            print("         ⚠️  Font file is corrupted (HTML error page) - will be removed from CSS", flush=True)
             return None
 
-        print(f"         ✓ Downloaded from CDN (live fallback)", flush=True)
+        print("         ✓ Downloaded from CDN (live fallback)", flush=True)
         return content
-    
+
     def _get_file_type_from_url(self, url: str) -> str:
         """Get a human-readable file type from URL."""
         parsed = urlparse(url)
         path = parsed.path.lower()
-        
+
         # Check for Google Fonts CSS files (they don't have .css extension)
         if self._is_google_fonts_css(url):
             return "CSS"
-        
-        if path.endswith('.html') or path.endswith('.htm') or not os.path.splitext(path)[1]:
+
+        if path.endswith(".html") or path.endswith(".htm") or not os.path.splitext(path)[1]:
             return "HTML"
-        elif path.endswith('.css'):
+        elif path.endswith(".css"):
             return "CSS"
-        elif path.endswith('.js') or path.endswith('.mjs'):
+        elif path.endswith(".js") or path.endswith(".mjs"):
             return "JavaScript"
-        elif any(path.endswith(ext) for ext in ['.woff', '.woff2', '.ttf', '.eot', '.otf', '.svg']):
+        elif any(path.endswith(ext) for ext in [".woff", ".woff2", ".ttf", ".eot", ".otf", ".svg"]):
             return "Font"
-        elif any(path.endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.ico']):
+        elif any(path.endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".ico"]):
             return "Image"
-        elif path.endswith('.json'):
+        elif path.endswith(".json"):
             return "JSON"
-        elif path.endswith('.xml'):
+        elif path.endswith(".xml"):
             return "XML"
         else:
             return "Asset"
@@ -1211,6 +1256,7 @@ class WaybackDownloader:
 
         try:
             import minify_html
+
             # minify-html is a Python 3.14+ compatible alternative to htmlmin
             # minify_html.minify() expects a string, not bytes
             return minify_html.minify(html, minify_js=False, minify_css=False)
@@ -1233,13 +1279,13 @@ class WaybackDownloader:
 
     def _check_and_remove_corrupted_fonts_in_css(self, css: str, base_url: str) -> str:
         """Proactively check font URLs in CSS and detect corrupted ones.
-        
+
         This checks font files referenced in CSS to see if they're HTML error pages,
         even before they're queued for download.
         """
         # Probe the absolute URLs the stylesheet names, before the rewrite
         # turns them into local paths that no longer say which host they are on
-        font_extensions = ('.woff', '.woff2', '.ttf', '.eot', '.otf', '.svg')
+        font_extensions = (".woff", ".woff2", ".ttf", ".eot", ".otf", ".svg")
         for font_url in self._extract_css_urls(css, base_url):
             if not font_url.lower().endswith(font_extensions):
                 continue
@@ -1248,7 +1294,7 @@ class WaybackDownloader:
             if font_url in self.corrupted_fonts or font_url in self._probed_fonts:
                 continue
             self._probed_fonts.add(font_url)
-            
+
             # Try to download and check if corrupted (with quick timeout)
             try:
                 wayback_url = self._convert_to_wayback_url_with_timestamp(font_url)
@@ -1257,22 +1303,22 @@ class WaybackDownloader:
                     if self._is_corrupted_font(response.content, font_url):
                         self.corrupted_fonts.add(font_url)
                         print(f"         ⚠️  Detected corrupted font in CSS: {os.path.basename(font_url)}", flush=True)
-            except Exception as e:
+            except Exception:
                 # If we can't check, skip - it will be checked when actually downloaded
                 # Don't print errors here to avoid spam
                 pass
-        
+
         return css
-    
+
     def _remove_corrupted_fonts_from_css(self, css: str) -> str:
         """Remove references to corrupted font files from CSS.
-        
+
         This prevents browsers from trying to load HTML error pages as fonts,
         which can break typography.
         """
         if not self.corrupted_fonts:
             return css
-        
+
         # For each corrupted font, remove its references from CSS
         for corrupted_font_url in self.corrupted_fonts:
             font_filename = os.path.basename(urlparse(corrupted_font_url).path)
@@ -1287,40 +1333,51 @@ class WaybackDownloader:
                 rf'(?:,\s*)?url\s*\(\s*["\']?(?:[^"\'()]*/)?{re.escape(font_filename)}'
                 rf'(?:[?#][^"\'()]*)?["\']?\s*\)(?:\s*format\s*\([^)]*\))?'
             )
-            css = re.sub(pattern, '', css, flags=re.IGNORECASE)
-        
+            css = re.sub(pattern, "", css, flags=re.IGNORECASE)
+
         # Clean up any double commas or trailing commas
-        css = re.sub(r',\s*,+', ',', css)  # Multiple commas
-        css = re.sub(r',\s*}', '}', css)  # Trailing comma before }
-        css = re.sub(r'src:\s*,', 'src:', css)  # src: with leading comma
-        css = re.sub(r'src:\s*;', '', css)  # Empty src:;
-        
+        css = re.sub(r",\s*,+", ",", css)  # Multiple commas
+        css = re.sub(r",\s*}", "}", css)  # Trailing comma before }
+        css = re.sub(r"src:\s*,", "src:", css)  # src: with leading comma
+        css = re.sub(r"src:\s*;", "", css)  # Empty src:;
+
         return css
-    
+
     def _remove_legacy_font_formats_from_css(self, css: str) -> str:
         """Remove .eot and .svg font format references from CSS.
-        
+
         These legacy formats are often corrupted (HTML error pages) in Wayback Machine,
         and modern browsers don't need them - they'll use .woff2, .woff, and .ttf.
         """
         # Remove .eot references (with or without format)
-        css = re.sub(r',\s*url\s*\(\s*["\']?[^"\'()]*\.eot["\']?\s*\)\s*(?:format\s*\([^)]+\))?', '', css, flags=re.IGNORECASE)
-        css = re.sub(r'url\s*\(\s*["\']?[^"\'()]*\.eot["\']?\s*\)\s*(?:format\s*\([^)]+\))?', '', css, flags=re.IGNORECASE)
-        css = re.sub(r'src:\s*url\s*\(\s*["\']?[^"\'()]*\.eot["\']?\s*\)\s*;', '', css, flags=re.IGNORECASE)
-        
+        css = re.sub(
+            r',\s*url\s*\(\s*["\']?[^"\'()]*\.eot["\']?\s*\)\s*(?:format\s*\([^)]+\))?', "", css, flags=re.IGNORECASE
+        )
+        css = re.sub(
+            r'url\s*\(\s*["\']?[^"\'()]*\.eot["\']?\s*\)\s*(?:format\s*\([^)]+\))?', "", css, flags=re.IGNORECASE
+        )
+        css = re.sub(r'src:\s*url\s*\(\s*["\']?[^"\'()]*\.eot["\']?\s*\)\s*;', "", css, flags=re.IGNORECASE)
+
         # Remove .svg font format references (but keep .svg images)
         # Only remove if it's in a font context (has format("svg") or in @font-face)
-        css = re.sub(r',\s*url\s*\(\s*["\']?[^"\'()]*\.svg["\']?\s*\)\s+format\s*\(["\']?svg["\']?\)', '', css, flags=re.IGNORECASE)
-        css = re.sub(r'url\s*\(\s*["\']?[^"\'()]*\.svg["\']?\s*\)\s+format\s*\(["\']?svg["\']?\)', '', css, flags=re.IGNORECASE)
-        
+        css = re.sub(
+            r',\s*url\s*\(\s*["\']?[^"\'()]*\.svg["\']?\s*\)\s+format\s*\(["\']?svg["\']?\)',
+            "",
+            css,
+            flags=re.IGNORECASE,
+        )
+        css = re.sub(
+            r'url\s*\(\s*["\']?[^"\'()]*\.svg["\']?\s*\)\s+format\s*\(["\']?svg["\']?\)', "", css, flags=re.IGNORECASE
+        )
+
         # Clean up any double commas or trailing commas
-        css = re.sub(r',\s*,+', ',', css)  # Multiple commas
-        css = re.sub(r',\s*}', '}', css)  # Trailing comma before }
-        css = re.sub(r'src:\s*,', 'src:', css)  # src: with leading comma
-        css = re.sub(r'src:\s*;', '', css)  # Empty src:;
-        
+        css = re.sub(r",\s*,+", ",", css)  # Multiple commas
+        css = re.sub(r",\s*}", "}", css)  # Trailing comma before }
+        css = re.sub(r"src:\s*,", "src:", css)  # src: with leading comma
+        css = re.sub(r"src:\s*;", "", css)  # Empty src:;
+
         return css
-    
+
     def _minify_css(self, content: str) -> str:
         """Minify CSS."""
         if not self.config.minify_css:
@@ -1334,10 +1391,10 @@ class WaybackDownloader:
             print(f"Error minifying CSS: {e}")
             return content
 
-    def _extract_css_urls(self, css: str, base_url: str) -> List[str]:
+    def _extract_css_urls(self, css: str, base_url: str) -> list[str]:
         """Extract URLs from CSS content."""
         urls = []
-        
+
         # Extract @import URLs
         import_pattern = r'@import\s+(?:url\()?["\']?((?:[^"\'()]|\([^"\'()]*\))+)["\']?\)?'
         for match in re.finditer(import_pattern, css, re.IGNORECASE):
@@ -1349,7 +1406,7 @@ class WaybackDownloader:
             normalized = self._normalize_url(import_url, base_url)
             if normalized not in urls:
                 urls.append(normalized)
-        
+
         # Extract url() references (images, fonts, etc.)
         url_pattern = r'url\s*\(\s*["\']?((?:[^"\'()]|\([^"\'()]*\))+)["\']?\s*\)'
         for match in re.finditer(url_pattern, css, re.IGNORECASE):
@@ -1364,27 +1421,27 @@ class WaybackDownloader:
                 # This is critical for font files referenced with relative paths in CSS
                 if css_url.startswith("/") and not css_url.startswith("//"):
                     # Absolute path from domain root - construct full URL
-                    from urllib.parse import urljoin
                     parsed_base = urlparse(base_url)
                     css_url = f"{parsed_base.scheme}://{parsed_base.netloc}{css_url}"
                 normalized = self._normalize_url(css_url, base_url)
                 if normalized not in urls:
                     urls.append(normalized)
-        
+
         return urls
 
     def _rewrite_css_urls(self, css: str, base_url: str) -> str:
         """Rewrite URLs in CSS to relative paths."""
+
         def replace_css_url(match):
             """Rewrite a single CSS url() match to a relative local path."""
             full_match = match.group(0)
             url_part = match.group(1)
-            
+
             # Extract original URL from wayback path
             original = self._extract_original_url_from_path(url_part)
             if original:
                 url_part = original
-            
+
             # Handle absolute paths starting with / in Google Fonts CSS files
             # These are relative to fonts.gstatic.com, not the site's domain
             if url_part.startswith("/") and not url_part.startswith("//"):
@@ -1396,9 +1453,9 @@ class WaybackDownloader:
                     # Regular absolute path - convert using base_url
                     parsed_base = urlparse(base_url)
                     url_part = f"{parsed_base.scheme}://{parsed_base.netloc}{url_part}"
-            
+
             normalized = self._normalize_url(url_part, base_url)
-            
+
             # Handle fonts.gstatic.com URLs - these need to be converted to local paths
             # to avoid CORS issues when loading from localhost
             is_google_font = _host_matches(normalized, self.GOOGLE_FONT_HOSTS)
@@ -1406,7 +1463,7 @@ class WaybackDownloader:
             if self._is_internal_url(normalized) or is_google_font or is_squarespace_cdn:
                 # @import names a stylesheet; a bare url() names an asset, and
                 # the two want different extensions when the URL carries none.
-                preceding = match.string[:match.start()].rstrip()
+                preceding = match.string[: match.start()].rstrip()
                 reference_kind = "stylesheet" if preceding.endswith("@import") else "asset"
                 if reference_kind == "stylesheet":
                     # Note it before the branch below, which does not run at
@@ -1423,7 +1480,7 @@ class WaybackDownloader:
                     new_path = self._make_relative_path(normalized, reference_kind)
                     return f"url({new_path})"
                 return f"url({normalized})"
-            
+
             # If it's a Squarespace CDN URL, still rewrite it to local path
             if is_squarespace_cdn:
                 parsed_resource = urlparse(normalized)
@@ -1434,9 +1491,9 @@ class WaybackDownloader:
                 if self.config.make_internal_links_relative:
                     return f"url(/{resource_path})"
                 return f"url({normalized})"
-            
+
             return full_match
-        
+
         def replace_bare_import(match):
             """Rewrite @import "path" - the form with no url() wrapper."""
             url_part = match.group(1).strip()
@@ -1491,10 +1548,10 @@ class WaybackDownloader:
 
         return css
 
-    def _extract_js_urls(self, js: str, base_url: str) -> List[str]:
+    def _extract_js_urls(self, js: str, base_url: str) -> list[str]:
         """Extract URLs from JavaScript content."""
         urls = []
-        
+
         # More specific patterns to avoid false positives (like code snippets)
         patterns = [
             r'(?:fetch|XMLHttpRequest|axios\.get|axios\.post|\.load|\.ajax)\s*\(\s*["\']([^"\']+)["\']',  # Fetch/ajax calls
@@ -1503,7 +1560,7 @@ class WaybackDownloader:
             r'url\s*[:=]\s*["\'](https?://[^"\']+)["\']',  # URL properties
             r'["\'](https?://[^"\']+\.(?:jpg|jpeg|png|gif|svg|webp|css|js|woff|woff2|ttf|eot|otf)[^"\']*)["\']',  # Asset URLs
         ]
-        
+
         for pattern in patterns:
             for match in re.finditer(pattern, js):
                 js_url = match.group(1).strip()
@@ -1514,14 +1571,14 @@ class WaybackDownloader:
                     continue
                 if not js_url.startswith(("http://", "https://", "/")):
                     continue
-                    
+
                 original = self._extract_original_url_from_path(js_url)
                 if original:
                     js_url = original
                 normalized = self._normalize_url(js_url, base_url)
                 if normalized not in urls and self._is_internal_url(normalized):
                     urls.append(normalized)
-        
+
         return urls
 
     def _optimize_image(self, content: bytes, format: str = "JPEG") -> bytes:
@@ -1530,8 +1587,9 @@ class WaybackDownloader:
             return content
 
         try:
-            from PIL import Image
             from io import BytesIO
+
+            from PIL import Image
 
             img = Image.open(BytesIO(content))
 
@@ -1555,7 +1613,7 @@ class WaybackDownloader:
             return content
 
     @staticmethod
-    def _split_srcset(srcset: str) -> List[Tuple[str, str]]:
+    def _split_srcset(srcset: str) -> list[tuple[str, str]]:
         """
         Split a srcset into (url, descriptor) candidates, as browsers do.
 
@@ -1580,7 +1638,7 @@ class WaybackDownloader:
                 descriptor = descriptor.strip()
             candidates.append((url, descriptor))
 
-    def _rewrite_srcset(self, srcset: str, base_url: str, links_to_follow: List[str]) -> str:
+    def _rewrite_srcset(self, srcset: str, base_url: str, links_to_follow: list[str]) -> str:
         """Rewrite every srcset candidate to its local path and queue it."""
         srcset_parts = []
         for url_part, descriptor in self._split_srcset(srcset):
@@ -1593,7 +1651,9 @@ class WaybackDownloader:
                 url_part = original
 
             normalized_srcset = self._normalize_url(url_part, base_url)
-            is_squarespace_cdn = self._is_squarespace_cdn(normalized_srcset) or self._is_squarespace_cdn(original_srcset)
+            is_squarespace_cdn = self._is_squarespace_cdn(normalized_srcset) or self._is_squarespace_cdn(
+                original_srcset
+            )
 
             if not (self._is_internal_url(normalized_srcset) or is_squarespace_cdn):
                 # Keep external URLs as-is
@@ -1636,6 +1696,7 @@ class WaybackDownloader:
         pass treats it like any other URL: a local path when it is on the
         site, the base's host when it is not.
         """
+
         def resolve(value: str) -> str:
             value = value.strip()
             if (
@@ -1663,11 +1724,11 @@ class WaybackDownloader:
             if style_tag.string:
                 style_tag.string = resolve_css(style_tag.string)
 
-    def _process_html(self, html: str, base_url: str) -> tuple[str, List[str]]:
+    def _process_html(self, html: str, base_url: str) -> tuple[str, list[str]]:
         """Process HTML content and extract links."""
         self._current_page_url = base_url
         soup = BeautifulSoup(html, "lxml")
-        links_to_follow: List[str] = []
+        links_to_follow: list[str] = []
 
         # <base href> changes what relative references resolve against, so
         # resolve against it. The links written below are relative to the
@@ -1687,13 +1748,16 @@ class WaybackDownloader:
                 continue
             try:
                 element_id = element.get("id")
-                if element_id and any(banner_id in str(element_id).lower() for banner_id in ["wm-ipp", "wm-bipp", "wm-toolbar", "wm-ipp-base"]):
+                if element_id and any(
+                    banner_id in str(element_id).lower()
+                    for banner_id in ["wm-ipp", "wm-bipp", "wm-toolbar", "wm-ipp-base"]
+                ):
                     elements_to_remove.append(element)
             except (AttributeError, TypeError):
                 continue
         for element in elements_to_remove:
             element.decompose()
-        
+
         # Remove wayback machine script tags by src
         # But preserve cookie consent scripts (cookieyes, etc.) even if they come from external CDNs
         for script in soup.find_all("script", src=True):
@@ -1711,10 +1775,12 @@ class WaybackDownloader:
             if (
                 (is_archive_host and not parsed_src.path.startswith("/web/"))
                 or src.startswith("/_static/")
-                or "bundle-playback.js" in src or "wombat.js" in src or "ruffle.js" in src
+                or "bundle-playback.js" in src
+                or "wombat.js" in src
+                or "ruffle.js" in src
             ):
                 script.decompose()
-        
+
         # Remove wayback machine link tags by href (but keep internal links that need processing)
         for link in soup.find_all("link", href=True):
             if link is None:
@@ -1726,7 +1792,7 @@ class WaybackDownloader:
             if "banner-styles.css" in href or "iconochive.css" in href or "web-static.archive.org" in href:
                 link.decompose()
             # For /web/ paths, we'll process them below, don't remove here
-        
+
         # Remove wayback-specific meta tags and scripts
         for meta in soup.find_all("meta"):
             if meta is None:
@@ -1735,14 +1801,14 @@ class WaybackDownloader:
             meta_content = meta.get("content", "")
             if meta_property == "og:url" and meta_content and "web.archive.org" in str(meta_content):
                 meta.decompose()
-        
+
         # Remove inline wayback scripts (__wm, __wm.wombat, RufflePlayer)
         for script in soup.find_all("script"):
             if script.string:
                 script_content = script.string
                 if any(pattern in script_content for pattern in ["__wm", "wombat", "RufflePlayer", "web.archive.org"]):
                     script.decompose()
-        
+
         # Add Static object stub if needed (for Squarespace sites)
         # Check if any script references Static but it's not defined
         needs_static_stub = False
@@ -1750,12 +1816,11 @@ class WaybackDownloader:
             if script.string and ("Static." in script.string or "window.Static" in script.string):
                 needs_static_stub = True
                 break
-        
+
         if needs_static_stub:
             # Find the first script tag and add stub before it, or add after SQUARESPACE_ROLLUPS if present
             first_script = soup.find("script")
             if first_script:
-                static_stub = soup.new_string("\n")
                 static_script = soup.new_tag("script")
                 static_script.string = "window.Static = window.Static || {}; window.Static.SQUARESPACE_CONTEXT = window.Static.SQUARESPACE_CONTEXT || { showAnnouncementBar: false };"
                 # Try to insert after SQUARESPACE_ROLLUPS script if it exists
@@ -1768,7 +1833,7 @@ class WaybackDownloader:
                     rollups_script.insert_after(static_script)
                 else:
                     first_script.insert_before(static_script)
-        
+
         # Remove comments
         for comment in soup.find_all(string=lambda text: isinstance(text, Comment)):
             comment.extract()
@@ -1792,7 +1857,7 @@ class WaybackDownloader:
                         # Skip cookieyes and cookie consent scripts - preserve them
                         if "cookieyes" not in script_text and "cookie consent" not in script_text:
                             script.decompose()
-            
+
             # Note: Cookie popups and consent UI are preserved - they're part of site functionality
 
         # Remove ads
@@ -1842,7 +1907,7 @@ class WaybackDownloader:
             # A same-page fragment or a script link names no other page.
             if href.startswith("#") or href.strip().lower().startswith(("javascript:", "data:", "blob:", "about:")):
                 continue
-            
+
             # Check if this link is inside a floating buttons container BEFORE processing
             is_floating_button = False
             parent_classes = []
@@ -1858,13 +1923,19 @@ class WaybackDownloader:
                 if parent_id and "sp-footeredu" in str(parent_id):
                     is_floating_button = True
                 parent = parent.find_parent()
-            
-            is_floating_button = is_floating_button or any("botonesflotantes" in str(cls).lower() for cls in parent_classes)
-            
+
+            is_floating_button = is_floating_button or any(
+                "botonesflotantes" in str(cls).lower() for cls in parent_classes
+            )
+
             # For floating button links, preserve them as-is (don't process wayback URLs)
             if is_floating_button:
                 # Extract wayback URL from href if present, but preserve tel:/mailto: protocols
-                if href.startswith("https://web.archive.org/web/") or href.startswith("http://web.archive.org/web/") or href.startswith("/web/"):
+                if (
+                    href.startswith("https://web.archive.org/web/")
+                    or href.startswith("http://web.archive.org/web/")
+                    or href.startswith("/web/")
+                ):
                     # Extract protocol-relative URL from wayback path (e.g., /web/TIMESTAMP/tel:xxx)
                     wayback_protocol_pattern = r"/web/\d+[a-z]*/(tel:|mailto:|whatsapp:)(.+)"
                     match = re.search(wayback_protocol_pattern, href)
@@ -1881,7 +1952,7 @@ class WaybackDownloader:
                         # Handle both relative (/web/TIMESTAMP/mailto:...) and absolute (https://web.archive.org/web/TIMESTAMP/mailto:...)
                         mailto_direct_patterns = [
                             r"/web/\d+[a-z]*/(mailto:[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})",
-                            r"https?://web\.archive\.org/web/\d+[a-z]*/(mailto:[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})"
+                            r"https?://web\.archive\.org/web/\d+[a-z]*/(mailto:[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})",
                         ]
                         mailto_extracted = False
                         for pattern in mailto_direct_patterns:
@@ -1891,11 +1962,13 @@ class WaybackDownloader:
                                 link["href"] = href
                                 mailto_extracted = True
                                 break
-                        
+
                         if not mailto_extracted:
                             # Check if it's an email address hidden in an https:// URL
                             # Pattern: /web/TIMESTAMP/https://domain.com/email@domain.com
-                            mailto_pattern = r"/web/\d+[a-z]*/https?://[^/]+/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})"
+                            mailto_pattern = (
+                                r"/web/\d+[a-z]*/https?://[^/]+/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})"
+                            )
                             mailto_match = re.search(mailto_pattern, href)
                             if mailto_match:
                                 email = mailto_match.group(1)
@@ -1916,7 +1989,7 @@ class WaybackDownloader:
                                         link["href"] = href
                 # Skip further processing for floating buttons - preserve them
                 continue
-            
+
             # Extract wayback URL first (for non-floating-button links)
             original = self._extract_original_url_from_path(href)
             if original:
@@ -1943,9 +2016,14 @@ class WaybackDownloader:
                     if "sppb-icons-group-list" in parent_classes_str or "icons-group" in parent_classes_str.lower():
                         is_in_icon_group = True
                         break
-                parent = parent.parent if hasattr(parent, 'parent') else None
-            
-            if self.config.remove_clickable_contacts and self._is_contact_link(original_url) and not is_floating_button and not is_in_icon_group:
+                parent = parent.parent if hasattr(parent, "parent") else None
+
+            if (
+                self.config.remove_clickable_contacts
+                and self._is_contact_link(original_url)
+                and not is_floating_button
+                and not is_in_icon_group
+            ):
                 if self.config.remove_external_links_remove_anchors:
                     link.decompose()
                 else:
@@ -1959,12 +2037,12 @@ class WaybackDownloader:
                     # Update href to the extracted URL (removes wayback prefix)
                     link["href"] = original_url
                     continue
-                
+
                 # Don't remove/modify contact links in floating buttons
                 if is_floating_button and self._is_contact_link(original_url):
                     # Keep the original href for floating button contact links
                     continue
-                
+
                 # Preserve button links (sppb-btn classes) - these are styled buttons that should remain functional
                 link_classes = link.get("class", [])
                 if link_classes and isinstance(link_classes, list):
@@ -1973,13 +2051,13 @@ class WaybackDownloader:
                     link_classes_str = str(link_classes)
                 else:
                     link_classes_str = ""
-                
+
                 is_button_link = "sppb-btn" in link_classes_str or "btn" in link_classes_str
                 if is_button_link:
                     # Preserve button links - just clean up the href (remove wayback prefix)
                     link["href"] = original_url
                     continue
-                
+
                 # Preserve links in icon groups (sppb-icons-group-list) - these are social media icons
                 # Check if the link is inside an icon group list
                 parent = link.parent
@@ -1994,13 +2072,13 @@ class WaybackDownloader:
                         if "sppb-icons-group-list" in parent_classes_str or "icons-group" in parent_classes_str.lower():
                             is_in_icon_group = True
                             break
-                    parent = parent.parent if hasattr(parent, 'parent') else None
-                
+                    parent = parent.parent if hasattr(parent, "parent") else None
+
                 if is_in_icon_group:
                     # Preserve icon group links - just clean up the href (remove wayback prefix)
                     link["href"] = original_url
                     continue
-                
+
                 if self.config.remove_external_links_remove_anchors:
                     link.decompose()
                 elif self.config.remove_external_links_keep_anchors:
@@ -2135,20 +2213,30 @@ class WaybackDownloader:
             if not self._is_internal_url(normalized_url):
                 # Check if this is a Google Fonts CSS file available on Wayback Machine
                 # The original_href might be a wayback path like //web.archive.org/web/...cs_/http://fonts.googleapis.com/...
-                is_google_font = _host_matches(normalized_url, self.GOOGLE_FONTS_CSS_HOSTS) or _host_matches(original_href, self.GOOGLE_FONTS_CSS_HOSTS)
+                is_google_font = _host_matches(normalized_url, self.GOOGLE_FONTS_CSS_HOSTS) or _host_matches(
+                    original_href, self.GOOGLE_FONTS_CSS_HOSTS
+                )
                 is_squarespace_cdn = self._is_squarespace_cdn(normalized_url) or self._is_squarespace_cdn(original_href)
-                
+
                 if is_google_font or is_squarespace_cdn:
                     # Extract original URL from wayback path if present (use original_href which has the wayback path)
                     original_resource_url = self._extract_original_url_from_path(original_href)
                     if not original_resource_url:
                         # If extraction failed, try using the already-extracted href
-                        original_resource_url = href if (is_google_font and _host_matches(href, self.GOOGLE_FONTS_CSS_HOSTS)) or (is_squarespace_cdn and self._is_squarespace_cdn(href)) else None
+                        original_resource_url = (
+                            href
+                            if (is_google_font and _host_matches(href, self.GOOGLE_FONTS_CSS_HOSTS))
+                            or (is_squarespace_cdn and self._is_squarespace_cdn(href))
+                            else None
+                        )
                     if original_resource_url:
                         # Add to queue to download from Wayback Machine
                         links_to_follow.append(original_resource_url)
                         resource_type = "Google Fonts CSS" if is_google_font else "Squarespace CDN"
-                        print(f"         📥 Queued {resource_type} for download: {original_resource_url[:80]}...", flush=True)
+                        print(
+                            f"         📥 Queued {resource_type} for download: {original_resource_url[:80]}...",
+                            flush=True,
+                        )
                         # Point the HTML at the file _get_local_path stores
                         # it as (for Google Fonts, css-<hash of query>.css).
                         if self.config.make_internal_links_relative:
@@ -2161,7 +2249,7 @@ class WaybackDownloader:
                                 self._output_relative_url(self._get_local_path(original_resource_url))
                             )
                         continue
-                
+
                 # A stylesheet is part of the page, not a link to another
                 # site: the external-link flags leave it. Drop the Wayback
                 # prefix, which points nowhere offline.
@@ -2297,9 +2385,11 @@ class WaybackDownloader:
             style_urls = self._extract_css_urls(style, base_url)
             for style_url in style_urls:
                 is_squarespace_cdn = self._is_squarespace_cdn(style_url)
-                if style_url not in self.config.visited_urls and (self._is_internal_url(style_url) or is_squarespace_cdn):
+                if style_url not in self.config.visited_urls and (
+                    self._is_internal_url(style_url) or is_squarespace_cdn
+                ):
                     links_to_follow.append(style_url)
-            
+
             # Rewrite URLs in inline styles. This is the same job
             # _rewrite_css_urls already does for <style> blocks and .css files.
             # The hand-rolled version that used to live here only matched
@@ -2320,9 +2410,11 @@ class WaybackDownloader:
                 style_urls = self._extract_css_urls(css_content, base_url)
                 for style_url in style_urls:
                     is_squarespace_cdn = self._is_squarespace_cdn(style_url)
-                    if style_url not in self.config.visited_urls and (self._is_internal_url(style_url) or is_squarespace_cdn):
+                    if style_url not in self.config.visited_urls and (
+                        self._is_internal_url(style_url) or is_squarespace_cdn
+                    ):
                         links_to_follow.append(style_url)
-                
+
                 # Rewrite URLs in style tag CSS
                 css_content = self._rewrite_css_urls(css_content, base_url)
                 # Remove references to corrupted fonts
@@ -2370,12 +2462,18 @@ class WaybackDownloader:
         # Process data-* attributes that contain URLs (e.g., data-video_src, data-src, data-href, etc.)
         # Convert domain URLs to relative paths to match Wayback Machine behavior
         for element in soup.find_all(True):  # All elements
-            if not hasattr(element, 'attrs') or not element.attrs:
+            if not hasattr(element, "attrs") or not element.attrs:
                 continue
             for attr_name, attr_value in list(element.attrs.items()):
-                if attr_name.startswith('data-') and isinstance(attr_value, str) and self._is_single_url_attr(attr_name, attr_value):
+                if (
+                    attr_name.startswith("data-")
+                    and isinstance(attr_value, str)
+                    and self._is_single_url_attr(attr_name, attr_value)
+                ):
                     # Check if attribute contains a domain URL
-                    if (self.config.domain and self.config.domain in attr_value) or self._is_squarespace_cdn(attr_value):
+                    if (self.config.domain and self.config.domain in attr_value) or self._is_squarespace_cdn(
+                        attr_value
+                    ):
                         rewrite_attr_url(element, attr_name, attr_value.strip())
 
         # Convert any remaining domain references in text content and attributes to relative paths
@@ -2383,16 +2481,25 @@ class WaybackDownloader:
         # The page's host, not the <base> one: a base on another host would
         # otherwise stop this pass from seeing the site's own URLs.
         base_domain = urlparse(self._current_page_url).netloc.lower().removeprefix("www.")
-        
+
         for element in soup.find_all(True):  # All elements
             for attr_name, attr_value in list(element.attrs.items()):
                 if not (isinstance(attr_value, str) and self._is_single_url_attr(attr_name, attr_value)):
                     continue
                 attr_value = attr_value.strip()
-                if base_domain in attr_value.lower() or self._is_squarespace_cdn(attr_value) or "web.archive.org" in attr_value or attr_value.startswith("/web/"):
+                if (
+                    base_domain in attr_value.lower()
+                    or self._is_squarespace_cdn(attr_value)
+                    or "web.archive.org" in attr_value
+                    or attr_value.startswith("/web/")
+                ):
                     # Check if it's a full URL with the domain or a Squarespace CDN URL
                     is_squarespace_cdn = self._is_squarespace_cdn(attr_value)
-                    if attr_value.startswith(("http://", "https://", "/web/")) or is_squarespace_cdn or "web.archive.org" in attr_value:
+                    if (
+                        attr_value.startswith(("http://", "https://", "/web/"))
+                        or is_squarespace_cdn
+                        or "web.archive.org" in attr_value
+                    ):
                         rewrite_attr_url(element, attr_name, attr_value)
 
         # Get processed HTML
@@ -2402,7 +2509,7 @@ class WaybackDownloader:
         # Every append above records the reference as written, which may be
         # relative to this page. Resolve them here, in one place, so the
         # queue only ever holds absolute URLs.
-        crawl_urls: List[str] = []
+        crawl_urls: list[str] = []
         for link_url in links_to_follow:
             crawl_url = self._crawl_url(link_url, base_url)
             if crawl_url and crawl_url not in crawl_urls:
@@ -2417,7 +2524,7 @@ class WaybackDownloader:
         except UnsafeOutputPathError:
             return url
 
-    def _crawl_url(self, url: str, base_url: str) -> Optional[str]:
+    def _crawl_url(self, url: str, base_url: str) -> str | None:
         """
         The absolute URL to fetch for a reference found on a page.
 
@@ -2488,32 +2595,32 @@ class WaybackDownloader:
         consecutive_refusals = 0
         stop_reason = None
 
-        print(f"\n{'='*70}", flush=True)
-        print(f"Wayback-Archive Downloader", flush=True)
-        print(f"{'='*70}", flush=True)
+        print(f"\n{'=' * 70}", flush=True)
+        print("Wayback-Archive Downloader", flush=True)
+        print(f"{'=' * 70}", flush=True)
         print(f"Starting URL: {self.config.base_url}", flush=True)
         print(f"Output directory: {self.config.output_dir}", flush=True)
         if self.config.max_files:
             print(f"⚠️  TEST MODE: Limited to {self.config.max_files} files", flush=True)
-        print(f"{'='*70}\n", flush=True)
+        print(f"{'=' * 70}\n", flush=True)
 
         while queue:
             # Check if we've reached the file limit (for testing). Failed
             # attempts count too, or a limited run could make hundreds of
             # requests past the limit.
             if self.config.max_files and len(self.config.visited_urls) >= self.config.max_files:
-                print(f"\n{'='*70}", flush=True)
+                print(f"\n{'=' * 70}", flush=True)
                 print(f"⚠️  Reached MAX_FILES limit ({self.config.max_files}) - stopping download", flush=True)
-                print(f"{'='*70}", flush=True)
+                print(f"{'=' * 70}", flush=True)
                 break
-            
+
             queue_size = len(queue)
             url = queue.pop(0)
-            
+
             # Skip fragment-only URLs (like #page, #section, etc.)
             if url.startswith("#"):
                 continue
-            
+
             try:
                 local_path = self._get_local_path(url)
             except UnsafeOutputPathError as e:
@@ -2535,7 +2642,7 @@ class WaybackDownloader:
             print(f"[{current_file_num}{limit_info}] Downloading {file_type}: {url}", flush=True)
             if queue_size > 1:
                 print(f"         Queue: {queue_size - 1} files remaining", flush=True)
-            
+
             self.config.visited_urls.add(normalized_for_tracking)
 
             content = self.download_file(url)
@@ -2547,23 +2654,24 @@ class WaybackDownloader:
                 # the version the URL names (x.y also as x.y.0), then 3.7.1.
                 # A ?ver= is often WordPress's version, not jQuery's.
                 if "jquery.min.js" in url.lower() and "cdn" not in url.lower():
-                    match = re.search(
-                        r"jquery[-./@]?v?(\d+\.\d+(?:\.\d+)?)|[?&]ver=(\d+\.\d+(?:\.\d+)?)", url, re.I
-                    )
+                    match = re.search(r"jquery[-./@]?v?(\d+\.\d+(?:\.\d+)?)|[?&]ver=(\d+\.\d+(?:\.\d+)?)", url, re.I)
                     versions = []
                     if match:
                         named = match.group(1) or match.group(2)
                         versions = [named] + ([named + ".0"] if named.count(".") == 1 else [])
                     for version in dict.fromkeys(versions + ["3.7.1"]):
                         if version == "3.7.1" and "3.7.1" not in versions:
-                            print(f"         jQuery version unknown or not on code.jquery.com; substituting 3.7.1", flush=True)
+                            print(
+                                "         jQuery version unknown or not on code.jquery.com; substituting 3.7.1",
+                                flush=True,
+                            )
                         content = self._fetch_from_live_cdn(f"https://code.jquery.com/jquery-{version}.min.js")
                         if content:
                             break
-                
+
                 if not content:
                     files_failed += 1
-                    print(f"         ⚠️  Failed to download", flush=True)
+                    print("         ⚠️  Failed to download", flush=True)
                     # Only a file no fallback could save counts as refused.
                     if refusal:
                         consecutive_refusals += 1
@@ -2577,19 +2685,19 @@ class WaybackDownloader:
 
             if self._is_html_instead_of_asset(content, url):
                 files_failed += 1
-                print(f"         ⚠️  Failed: got an HTML page instead of the file", flush=True)
+                print("         ⚠️  Failed: got an HTML page instead of the file", flush=True)
                 continue
             if url == start_url:
                 url = self._follow_start_redirect(url)
             charset = self._last_charset
-            
+
             # Show file size
             size_kb = len(content) / 1024
             if size_kb < 1024:
                 print(f"         ✓ Downloaded ({size_kb:.1f} KB)", flush=True)
             else:
-                print(f"         ✓ Downloaded ({size_kb/1024:.1f} MB)", flush=True)
-            
+                print(f"         ✓ Downloaded ({size_kb / 1024:.1f} MB)", flush=True)
+
             files_downloaded += 1
 
             # Determine file type with robust detection
@@ -2600,7 +2708,7 @@ class WaybackDownloader:
                 # calls .pl text/plain), so let the content decide.
                 if os.path.splitext(parsed.path.lower())[1] in self.PAGE_EXTENSIONS:
                     content_type = None
-                
+
                 # Better content type detection from URL path
                 # Check for Google Fonts CSS files first (they don't have .css extension)
                 if self._is_google_fonts_css(url):
@@ -2614,7 +2722,10 @@ class WaybackDownloader:
                         content_type = "application/javascript"
                     elif any(path_lower.endswith(ext) for ext in [".woff", ".woff2", ".ttf", ".eot", ".otf"]):
                         content_type = "font/woff2"  # Font file
-                    elif any(path_lower.endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".gif", ".svg", ".webp", ".ico", ".bmp", ".tiff"]):
+                    elif any(
+                        path_lower.endswith(ext)
+                        for ext in [".jpg", ".jpeg", ".png", ".gif", ".svg", ".webp", ".ico", ".bmp", ".tiff"]
+                    ):
                         content_type = "image/jpeg"  # Default, will be refined from actual content
                     elif path_lower.endswith(".json"):
                         content_type = "application/json"
@@ -2626,28 +2737,28 @@ class WaybackDownloader:
                         content_type = "video/mp4"
                     elif any(path_lower.endswith(ext) for ext in [".mp3", ".wav", ".ogg"]):
                         content_type = "audio/mpeg"
-                
+
                 # Try to detect from actual content if still unknown
                 if not content_type and len(content) > 0:
                     content_stripped = content.lstrip()
-                    if content_stripped.startswith((b'<!DOCTYPE', b'<!doctype', b'<html', b'<HTML')):
+                    if content_stripped.startswith((b"<!DOCTYPE", b"<!doctype", b"<html", b"<HTML")):
                         content_type = "text/html"
-                    elif content_stripped.startswith((b'/*', b'@charset')) or b'@media' in content[:200]:
+                    elif content_stripped.startswith((b"/*", b"@charset")) or b"@media" in content[:200]:
                         content_type = "text/css"
-                    elif content_stripped.startswith(b'<?xml') or b'<svg' in content[:200]:
+                    elif content_stripped.startswith(b"<?xml") or b"<svg" in content[:200]:
                         content_type = "image/svg+xml"
-                    elif content.startswith(b'\x89PNG'):
+                    elif content.startswith(b"\x89PNG"):
                         content_type = "image/png"
-                    elif content.startswith(b'\xff\xd8\xff'):
+                    elif content.startswith(b"\xff\xd8\xff"):
                         content_type = "image/jpeg"
-                    elif content.startswith(b'GIF'):
+                    elif content.startswith(b"GIF"):
                         content_type = "image/gif"
-                    elif content.startswith(b'RIFF') and b'WEBP' in content[:12]:
+                    elif content.startswith(b"RIFF") and b"WEBP" in content[:12]:
                         content_type = "image/webp"
             except Exception as e:
                 print(f"Warning: Error detecting content type for {url}: {e}")
                 content_type = None
-            
+
             try:
                 local_path.parent.mkdir(parents=True, exist_ok=True)
             except OSError as e:
@@ -2657,7 +2768,7 @@ class WaybackDownloader:
                 files_failed += 1
                 print(f"         ⛔ Cannot store {url}: {e}", flush=True)
                 continue
-            
+
             # A URL with no extension tells us nothing about its type, but the
             # element that referenced it does. Without this an extensionless
             # stylesheet sniffs as a page and gets rewritten as HTML - saved
@@ -2672,28 +2783,26 @@ class WaybackDownloader:
             try:
                 # Check for Google Fonts CSS files first (they don't have .css extension)
                 is_google_fonts_css = self._is_google_fonts_css(url)
-                
+
                 # Process based on content type - be more conservative about what we treat as HTML
                 # A script can answer with a PDF, JSON or CSV, so a server-side
                 # URL is a page only when its body is markup.
-                is_html = (
-                    not is_google_fonts_css and (
-                        content_type == "text/html" or
-                        (
-                            not content_type
-                            and self._is_html_url(url, parsed)
-                            and (
-                                os.path.splitext(parsed.path.lower())[1] not in self.PAGE_EXTENSIONS
-                                or self._looks_like_markup(content)
-                            )
+                is_html = not is_google_fonts_css and (
+                    content_type == "text/html"
+                    or (
+                        not content_type
+                        and self._is_html_url(url, parsed)
+                        and (
+                            os.path.splitext(parsed.path.lower())[1] not in self.PAGE_EXTENSIONS
+                            or self._looks_like_markup(content)
                         )
                     )
                 )
-                
+
                 if is_html:
                     # Process HTML
                     try:
-                        print(f"         Processing HTML and extracting links...", flush=True)
+                        print("         Processing HTML and extracting links...", flush=True)
                         # Saved as UTF-8; bs4 rewrites the <meta charset> to match.
                         html = self._decode_text(content, charset, is_html=True)
 
@@ -2703,6 +2812,7 @@ class WaybackDownloader:
                     except Exception as e:
                         print(f"Error processing HTML for {url}: {e}")
                         import traceback
+
                         traceback.print_exc()
                         # Still save the raw HTML if processing fails
                         try:
@@ -2740,9 +2850,9 @@ class WaybackDownloader:
                         flags=re.IGNORECASE,
                     )
                     original_css = css
-                    
+
                     try:
-                        print(f"         Processing CSS and extracting resources...", flush=True)
+                        print("         Processing CSS and extracting resources...", flush=True)
                         # Extract URLs from CSS (images, fonts, @import, etc.)
                         css_urls = self._extract_css_urls(css, url)
                         if css_urls:
@@ -2756,8 +2866,11 @@ class WaybackDownloader:
                                 queue_length = len(queue)
                                 enqueue(css_url)
                                 if is_google_font and len(queue) > queue_length:
-                                    print(f"         📥 Queued Google Font file for download: {css_url[:80]}...", flush=True)
-                        
+                                    print(
+                                        f"         📥 Queued Google Font file for download: {css_url[:80]}...",
+                                        flush=True,
+                                    )
+
                         # Check font URLs in CSS and detect corrupted ones proactively,
                         # while the CSS still names the real URLs. This ensures we
                         # catch corrupted fonts even if they haven't been downloaded yet
@@ -2774,15 +2887,15 @@ class WaybackDownloader:
                             css = self._rewrite_css_urls(css, url)
                         finally:
                             self._current_page_url = previous_page_url
-                        
+
                         # Remove references to already-detected corrupted fonts
                         css = self._remove_corrupted_fonts_from_css(css)
-                        
+
                         # Proactively remove .eot and .svg font format references
                         # These are often corrupted (HTML error pages) and modern browsers don't need them
                         # Browsers will use .woff2, .woff, and .ttf which are more reliable
                         css = self._remove_legacy_font_formats_from_css(css)
-                        
+
                         css = self._minify_css(css)
                     except Exception as e:
                         print(f"Warning: Error processing CSS for {url}: {e}")
@@ -2802,8 +2915,8 @@ class WaybackDownloader:
                 elif content_type in ("application/javascript", "text/javascript"):
                     # Process JavaScript
                     js = self._decode_text(content, charset)
-                    
-                    print(f"         Processing JavaScript and extracting URLs...", flush=True)
+
+                    print("         Processing JavaScript and extracting URLs...", flush=True)
                     # Extract URLs from JavaScript (may contain fetch, XMLHttpRequest, etc.)
                     js_urls = self._extract_js_urls(js, url)
                     if js_urls:
@@ -2811,7 +2924,7 @@ class WaybackDownloader:
                     for js_url in js_urls:
                         if self._is_internal_url(js_url):
                             enqueue(js_url)
-                    
+
                     js = self._minify_js(js)
 
                     with open(local_path, "w", encoding="utf-8") as f:
@@ -2858,13 +2971,11 @@ class WaybackDownloader:
         if files_downloaded == 0 and not stop_reason:
             # The start page failed, so nothing else was found. Say so rather
             # than report an empty archive as complete.
-            raise RuntimeError(
-                f"Nothing was saved: no usable capture of {self.config.base_url} could be downloaded"
-            )
+            raise RuntimeError(f"Nothing was saved: no usable capture of {self.config.base_url} could be downloaded")
 
-        print(f"\n{'='*70}", flush=True)
-        print(f"Download stopped early" if stop_reason else f"Download Complete!", flush=True)
-        print(f"{'='*70}", flush=True)
+        print(f"\n{'=' * 70}", flush=True)
+        print("Download stopped early" if stop_reason else "Download Complete!", flush=True)
+        print(f"{'=' * 70}", flush=True)
         print(f"Output directory: {self.config.output_dir}", flush=True)
         print(f"Files successfully downloaded: {files_downloaded}", flush=True)
         print(f"Files failed: {files_failed}", flush=True)
@@ -2872,7 +2983,6 @@ class WaybackDownloader:
         if self.corrupted_fonts:
             print(f"Corrupted fonts detected and removed: {len(self.corrupted_fonts)}", flush=True)
         print(f"Total files processed: {len(self.config.visited_urls)}", flush=True)
-        print(f"{'='*70}\n", flush=True)
+        print(f"{'=' * 70}\n", flush=True)
         if stop_reason:
             raise RuntimeError(stop_reason)
-
