@@ -393,7 +393,7 @@ class TestCssStylesheetLinks:
             '<html><head><link rel="stylesheet" href="http://cdn.other.com/style.css"></head><body>Test</body></html>'
         )
         processed, _ = self.dl._process_html(html, "http://example.com/")
-        assert "href=http://cdn.other.com/style.css" in processed
+        assert 'href="http://cdn.other.com/style.css"' in processed
 
     def test_internal_stylesheet_not_relative(self):
         """Internal stylesheet when make_internal_links_relative=False."""

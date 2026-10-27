@@ -1249,6 +1249,17 @@ class WaybackDownloader:
         else:
             return "Asset"
 
+    def _unwrap_wayback(self, value: str) -> str:
+        """
+        The original address of a reference Wayback wrote in its own form.
+
+        Used for references to another site that the archive does not
+        download: /web/<ts>im_/https://cdn.other.com/x.png is a dead path
+        offline and a Wayback request online, https://cdn.other.com/x.png is
+        what the page had. Anything else comes back unchanged.
+        """
+        return self._extract_original_url_from_path(value) or value
+
     def _optimize_html(self, html: str) -> str:
         """Optimize HTML code."""
         if not self.config.optimize_html:
@@ -1310,73 +1321,92 @@ class WaybackDownloader:
 
         return css
 
+    # One src entry: url(), its format() and the comma joining it to the
+    # entry before. [^"'()] keeps a match inside its own url().
+    _FONT_SRC_ENTRY = re.compile(
+        r'(,\s*)?url\s*\(\s*(["\']?)([^"\'()]*)\2\s*\)(?:\s*format\s*\([^)]*\))?', re.IGNORECASE
+    )
+    _FONT_FACE_BLOCK = re.compile(r"@font-face\s*\{[^{}]*\}", re.IGNORECASE)
+
+    @staticmethod
+    def _tidy_font_src(block: str) -> str:
+        """Drop the commas and empty src: an entry removal leaves behind."""
+        block = re.sub(r",\s*,+", ",", block)
+        block = re.sub(r",\s*(?=[;}])", "", block)
+        block = re.sub(r"(src\s*:)\s*,", r"\1", block, flags=re.IGNORECASE)
+        return re.sub(r"src\s*:\s*(?:;|(?=\}))", "", block, flags=re.IGNORECASE)
+
+    @staticmethod
+    def _font_ref_names(reference: str, font_url: str) -> bool:
+        """
+        True when a url() reference in a stylesheet names this font URL.
+
+        The reference may still be the absolute URL, or the local path the
+        rewrite wrote (../fonts/a.woff, fonts.gstatic.com/s/x.woff2), so it
+        is compared on everything it names: host and path when absolute, the
+        whole relative path otherwise. Query and fragment do not count.
+        """
+        ref = unquote(re.split(r"[?#]", reference.strip(), maxsplit=1)[0])
+        font = urlparse(font_url)
+        font_path = unquote(font.path)
+        if not ref:
+            return False
+        if ref.startswith("//") or re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", ref):
+            parsed = urlparse("https:" + ref if ref.startswith("//") else ref)
+            return (parsed.hostname or "").removeprefix("www.") == (font.hostname or "").removeprefix(
+                "www."
+            ) and unquote(parsed.path) == font_path
+        if ref.startswith("/"):
+            return ref == font_path
+        tail = re.sub(r"^(?:\.\.?/)+", "", ref)
+        return bool(tail) and any(
+            ("/" + full).endswith("/" + tail) for full in (font_path.lstrip("/"), f"{font.netloc}{font_path}")
+        )
+
     def _remove_corrupted_fonts_from_css(self, css: str) -> str:
         """Remove references to corrupted font files from CSS.
 
         This prevents browsers from trying to load HTML error pages as fonts,
-        which can break typography.
+        which can break typography. Only @font-face blocks are touched, and a
+        reference goes only when its whole path names a corrupted font: two
+        fonts sharing a file name in different folders are different fonts.
         """
         if not self.corrupted_fonts:
             return css
 
-        # For each corrupted font, remove its references from CSS
-        for corrupted_font_url in self.corrupted_fonts:
-            font_filename = os.path.basename(urlparse(corrupted_font_url).path)
-            if not font_filename:
-                continue
+        def drop_entry(match):
+            if any(self._font_ref_names(match.group(3), font) for font in self.corrupted_fonts):
+                return ""
+            return match.group(0)
 
-            # One url() entry naming this file in any directory, with its
-            # query or fragment, its format() and the comma joining it to the
-            # entry before. [^"'()] keeps a match inside its own url(), so it
-            # cannot run on into the rules that follow.
-            pattern = (
-                rf'(?:,\s*)?url\s*\(\s*["\']?(?:[^"\'()]*/)?{re.escape(font_filename)}'
-                rf'(?:[?#][^"\'()]*)?["\']?\s*\)(?:\s*format\s*\([^)]*\))?'
-            )
-            css = re.sub(pattern, "", css, flags=re.IGNORECASE)
+        def clean_block(match):
+            block = self._FONT_SRC_ENTRY.sub(drop_entry, match.group(0))
+            return self._tidy_font_src(block) if block != match.group(0) else block
 
-        # Clean up any double commas or trailing commas
-        css = re.sub(r",\s*,+", ",", css)  # Multiple commas
-        css = re.sub(r",\s*}", "}", css)  # Trailing comma before }
-        css = re.sub(r"src:\s*,", "src:", css)  # src: with leading comma
-        css = re.sub(r"src:\s*;", "", css)  # Empty src:;
-
-        return css
+        return self._FONT_FACE_BLOCK.sub(clean_block, css)
 
     def _remove_legacy_font_formats_from_css(self, css: str) -> str:
-        """Remove .eot and .svg font format references from CSS.
+        """Remove .eot and .svg font references from @font-face rules.
 
-        These legacy formats are often corrupted (HTML error pages) in Wayback Machine,
-        and modern browsers don't need them - they'll use .woff2, .woff, and .ttf.
+        These legacy formats are often corrupted (HTML error pages) in Wayback
+        Machine, and modern browsers use .woff2, .woff or .ttf instead. A rule
+        whose only sources are legacy keeps them: dropping them would leave
+        the font with no source at all. Nothing outside @font-face changes.
         """
-        # Remove .eot references (with or without format)
-        css = re.sub(
-            r',\s*url\s*\(\s*["\']?[^"\'()]*\.eot["\']?\s*\)\s*(?:format\s*\([^)]+\))?', "", css, flags=re.IGNORECASE
-        )
-        css = re.sub(
-            r'url\s*\(\s*["\']?[^"\'()]*\.eot["\']?\s*\)\s*(?:format\s*\([^)]+\))?', "", css, flags=re.IGNORECASE
-        )
-        css = re.sub(r'src:\s*url\s*\(\s*["\']?[^"\'()]*\.eot["\']?\s*\)\s*;', "", css, flags=re.IGNORECASE)
 
-        # Remove .svg font format references (but keep .svg images)
-        # Only remove if it's in a font context (has format("svg") or in @font-face)
-        css = re.sub(
-            r',\s*url\s*\(\s*["\']?[^"\'()]*\.svg["\']?\s*\)\s+format\s*\(["\']?svg["\']?\)',
-            "",
-            css,
-            flags=re.IGNORECASE,
-        )
-        css = re.sub(
-            r'url\s*\(\s*["\']?[^"\'()]*\.svg["\']?\s*\)\s+format\s*\(["\']?svg["\']?\)', "", css, flags=re.IGNORECASE
-        )
+        def is_legacy(reference: str) -> bool:
+            path = re.split(r"[?#]", reference, maxsplit=1)[0].lower()
+            return path.endswith((".eot", ".svg"))
 
-        # Clean up any double commas or trailing commas
-        css = re.sub(r",\s*,+", ",", css)  # Multiple commas
-        css = re.sub(r",\s*}", "}", css)  # Trailing comma before }
-        css = re.sub(r"src:\s*,", "src:", css)  # src: with leading comma
-        css = re.sub(r"src:\s*;", "", css)  # Empty src:;
+        def clean_block(match):
+            block = match.group(0)
+            entries = [m.group(3) for m in self._FONT_SRC_ENTRY.finditer(block)]
+            if not any(is_legacy(e) for e in entries) or all(is_legacy(e) for e in entries):
+                return block
+            block = self._FONT_SRC_ENTRY.sub(lambda m: "" if is_legacy(m.group(3)) else m.group(0), block)
+            return self._tidy_font_src(block)
 
-        return css
+        return self._FONT_FACE_BLOCK.sub(clean_block, css)
 
     def _minify_css(self, content: str) -> str:
         """Minify CSS."""
@@ -1384,9 +1414,11 @@ class WaybackDownloader:
             return content
 
         try:
-            import cssmin
+            # rcssmin keeps the spaces calc() and @supports need; cssmin
+            # turned calc(1px + -2px) into calc(1px+-2px), which is invalid.
+            import rcssmin
 
-            return cssmin.cssmin(content)
+            return rcssmin.cssmin(content)
         except Exception as e:
             print(f"Error minifying CSS: {e}")
             return content
@@ -1394,6 +1426,8 @@ class WaybackDownloader:
     def _extract_css_urls(self, css: str, base_url: str) -> list[str]:
         """Extract URLs from CSS content."""
         urls = []
+        # A commented-out rule loads nothing; CSS comments do not nest.
+        css = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
 
         # Extract @import URLs
         import_pattern = r'@import\s+(?:url\()?["\']?((?:[^"\'()]|\([^"\'()]*\))+)["\']?\)?'
@@ -1455,6 +1489,10 @@ class WaybackDownloader:
                     url_part = f"{parsed_base.scheme}://{parsed_base.netloc}{url_part}"
 
             normalized = self._normalize_url(url_part, base_url)
+            # Normalizing drops the fragment (sprite.svg#icon, filter.svg#f);
+            # the reference keeps it.
+            fragment = urlparse(url_part).fragment
+            fragment = "#" + fragment if fragment else ""
 
             # Handle fonts.gstatic.com URLs - these need to be converted to local paths
             # to avoid CORS issues when loading from localhost
@@ -1478,20 +1516,12 @@ class WaybackDownloader:
                     # stored (css-<hash>.css for a stylesheet), so the link
                     # goes through it like any other.
                     new_path = self._make_relative_path(normalized, reference_kind)
-                    return f"url({new_path})"
-                return f"url({normalized})"
+                    return f"url({new_path}{fragment})"
+                return f"url({normalized}{fragment})"
 
-            # If it's a Squarespace CDN URL, still rewrite it to local path
-            if is_squarespace_cdn:
-                parsed_resource = urlparse(normalized)
-                resource_path = f"{parsed_resource.netloc}{parsed_resource.path}"
-                # Remove leading slashes
-                while resource_path.startswith("/"):
-                    resource_path = resource_path[1:]
-                if self.config.make_internal_links_relative:
-                    return f"url(/{resource_path})"
-                return f"url({normalized})"
-
+            # Another site's file: its own address, not the Wayback one
+            if original:
+                return f"url({self._unwrap_wayback(match.group(1))})"
             return full_match
 
         def replace_bare_import(match):
@@ -1514,7 +1544,7 @@ class WaybackDownloader:
                 or self._is_squarespace_cdn(normalized)
                 or self._is_google_fonts_css(normalized)
             ):
-                return match.group(0)
+                return f'@import "{url_part}"' if original else match.group(0)
 
             # Note it before the branch below, which does not run with
             # relative links off - the import would then be downloaded as a
@@ -1596,16 +1626,32 @@ class WaybackDownloader:
             # Only re-encode a still image into the format it already is: a
             # favicon.ico came out as JPEG bytes, and an animated GIF as its
             # first frame.
-            if (img.format or "").upper() != format.upper() or getattr(img, "is_animated", False):
+            if (
+                (img.format or "").upper() != format.upper()
+                or getattr(img, "is_animated", False)
+                or getattr(img, "n_frames", 1) > 1
+            ):
+                return content
+            # A lossless WebP (VP8L chunk) would come back lossy. A stray
+            # match elsewhere in the file only skips the optimization.
+            if format.upper() == "WEBP" and b"VP8L" in content:
                 return content
 
+            # Colour profile and EXIF (orientation among it) shape how the
+            # image looks, so they go into the new file.
+            keep = {k: img.info[k] for k in ("icc_profile", "exif") if img.info.get(k)}
+
             # Convert only for JPEG (a CMYK one, say); PNG, GIF and WEBP keep
-            # their mode and so their transparency.
+            # their mode and so their transparency. A CMYK profile does not
+            # describe the RGB result, so it is not carried over.
             if format.upper() == "JPEG" and img.mode not in ("RGB", "L"):
                 img = img.convert("RGB")
+                keep.pop("icc_profile", None)
+            if format.upper() == "JPEG" and (img.info.get("progressive") or img.info.get("progression")):
+                keep["progressive"] = True
 
             output = BytesIO()
-            img.save(output, format=format, optimize=True, quality=85)
+            img.save(output, format=format, optimize=True, quality=85, **keep)
             optimized = output.getvalue()
             return optimized if len(optimized) < len(content) else content
         except Exception as e:
@@ -1656,8 +1702,8 @@ class WaybackDownloader:
             )
 
             if not (self._is_internal_url(normalized_srcset) or is_squarespace_cdn):
-                # Keep external URLs as-is
-                srcset_parts.append(item)
+                # Another site's image: its own address, not the Wayback one
+                srcset_parts.append(f"{self._unwrap_wayback(original_srcset)}{descriptor}" if original else item)
                 continue
 
             # Queue for download
@@ -1682,9 +1728,57 @@ class WaybackDownloader:
                 srcset_parts.append(f"{relative_path}{descriptor}")
         return ", ".join(srcset_parts)
 
-    # Attributes holding one URL that a <base href> re-bases.
-    _BASE_RELATIVE_ATTRS = ("href", "src", "poster", "data", "action", "background", "data-src")
+    # Attributes that load or link to what they name. Other attributes (alt,
+    # title, value, content) are text, even when the text is a URL.
+    URL_ATTRS = frozenset(
+        {
+            "href",
+            "src",
+            "poster",
+            "data",
+            "action",
+            "formaction",
+            "cite",
+            "background",
+            "longdesc",
+            "ping",
+            "data-src",
+            "data-srcset",
+            "data-bg",
+            "data-background",
+            "data-lazy-src",
+            "data-original",
+            "data-href",
+            "xlink:href",
+        }
+    )
+    # <meta content> is a URL only for these names (property= or name=).
+    URL_META_NAMES = frozenset({"og:image", "twitter:image", "msapplication-tileimage"})
+    _SRCSET_ATTRS = ("srcset", "imagesrcset", "data-srcset")
+
+    # Text that only Wayback's own inline scripts contain. Plain "__wm" or
+    # "wombat" also matched site variables, and "web.archive.org" any site
+    # script that links to the archive.
+    WAYBACK_INLINE_SCRIPT_TOKENS = ("__wm.", "_wm.wombat", "wombat.js", "/_static/js/", "archive_analytics")
+    # Text of the comments Wayback adds around its toolbar and at the end of
+    # the page, compared lowercased.
+    WAYBACK_COMMENT_MARKERS = (
+        "wayback",
+        "web.archive.org",
+        "file archived on",
+        "playback timings",
+        "internet archive",
+    )
     _HAS_SCHEME = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*:")
+
+    def _is_url_attr(self, element, attr_name: str) -> bool:
+        """True when this attribute of this element names something to load or follow."""
+        if attr_name in self.URL_ATTRS:
+            return True
+        if element.name == "meta" and attr_name == "content":
+            meta_name = element.get("property") or element.get("name") or ""
+            return str(meta_name).lower() in self.URL_META_NAMES
+        return False
 
     def _resolve_against_base(self, soup: BeautifulSoup, base_url: str) -> None:
         """
@@ -1714,9 +1808,14 @@ class WaybackDownloader:
             return css_url.sub(lambda m: f"url({m.group(1)}{resolve(m.group(2))}{m.group(1)})", css)
 
         for element in soup.find_all(True):
-            for attr_name in self._BASE_RELATIVE_ATTRS:
-                value = element.get(attr_name)
-                if isinstance(value, str):
+            for attr_name, value in list(element.attrs.items()):
+                if not isinstance(value, str):
+                    continue
+                if attr_name in self._SRCSET_ATTRS:
+                    element[attr_name] = ", ".join(
+                        f"{resolve(url)} {descriptor}".rstrip() for url, descriptor in self._split_srcset(value)
+                    )
+                elif self._is_url_attr(element, attr_name):
                     element[attr_name] = resolve(value)
             if isinstance(element.get("style"), str):
                 element["style"] = resolve_css(element["style"])
@@ -1802,11 +1901,15 @@ class WaybackDownloader:
             if meta_property == "og:url" and meta_content and "web.archive.org" in str(meta_content):
                 meta.decompose()
 
-        # Remove inline wayback scripts (__wm, __wm.wombat, RufflePlayer)
+        # Remove the inline scripts Wayback injects (__wm.init, __wm.wombat,
+        # archive_analytics, its Ruffle loader). A site script that only
+        # names web.archive.org or a "wombat" variable is the site's own.
         for script in soup.find_all("script"):
             if script.string:
                 script_content = script.string
-                if any(pattern in script_content for pattern in ["__wm", "wombat", "RufflePlayer", "web.archive.org"]):
+                if any(token in script_content for token in self.WAYBACK_INLINE_SCRIPT_TOKENS) or (
+                    "RufflePlayer" in script_content and "archive.org" in script_content
+                ):
                     script.decompose()
 
         # Add Static object stub if needed (for Squarespace sites)
@@ -1834,9 +1937,12 @@ class WaybackDownloader:
                 else:
                     first_script.insert_before(static_script)
 
-        # Remove comments
+        # Remove the comments Wayback adds (toolbar markers, the archive
+        # notice and playback timings). The site's own stay: IE conditional
+        # comments load scripts and styles, Knockout reads <!-- ko --> as code.
         for comment in soup.find_all(string=lambda text: isinstance(text, Comment)):
-            comment.extract()
+            if any(marker in comment.lower() for marker in self.WAYBACK_COMMENT_MARKERS):
+                comment.extract()
 
         # Remove trackers and analytics
         if self.config.remove_trackers:
@@ -1869,7 +1975,7 @@ class WaybackDownloader:
         # Remove external iframes
         if self.config.remove_external_iframes:
             for iframe in soup.find_all("iframe", src=True):
-                if not self._is_internal_url(iframe["src"]):
+                if not self._is_internal_url(self._unwrap_wayback(iframe["src"])):
                     iframe.decompose()
 
         # Process frames (<frame src="...">) and internal iframes
@@ -1896,6 +2002,8 @@ class WaybackDownloader:
 
                 if normalized_url not in self.config.visited_urls:
                     links_to_follow.append(original_url)
+            else:
+                frame["src"] = self._unwrap_wayback(frame["src"])
 
         # Process links
         for link in soup.find_all("a", href=True):
@@ -2163,6 +2271,8 @@ class WaybackDownloader:
 
                 if normalized_url not in self.config.visited_urls:
                     links_to_follow.append(original_url)
+            else:
+                img["src"] = self._unwrap_wayback(original_src)
 
         # Process HTML background attributes (legacy <body>, <table>, <td>, <tr>, <th>)
         for elem in soup.find_all(["body", "table", "td", "tr", "th"], attrs={"background": True}):
@@ -2181,6 +2291,8 @@ class WaybackDownloader:
                     elem["background"] = normalized_url
                 if normalized_url not in self.config.visited_urls:
                     links_to_follow.append(original_url)
+            else:
+                elem["background"] = self._unwrap_wayback(elem["background"])
 
         # Process srcset everywhere (img, picture > source, link
         # imagesrcset, lazy-load data-srcset): every candidate is rewritten
@@ -2297,6 +2409,8 @@ class WaybackDownloader:
 
                 if normalized_url not in self.config.visited_urls:
                     links_to_follow.append(original_url)
+            else:
+                script["src"] = self._unwrap_wayback(script["src"])
 
         # Process SVG use elements with xlink:href attributes
         for use_elem in soup.find_all("use"):
@@ -2332,6 +2446,9 @@ class WaybackDownloader:
                                 fragment = normalized_target + fragment
                             if normalized_target not in self.config.visited_urls:
                                 links_to_follow.append(normalized_target)
+                        elif target and not self._is_internal_url(normalized_target):
+                            # A sprite on another host keeps its address
+                            fragment = target + fragment
                         use_elem["xlink:href"] = fragment
                         if use_elem.get("href"):
                             use_elem["href"] = fragment
@@ -2377,6 +2494,8 @@ class WaybackDownloader:
 
                 if normalized_url not in self.config.visited_urls:
                     links_to_follow.append(normalized_url)
+            else:
+                link["href"] = self._unwrap_wayback(link["href"])
 
         # Process inline styles (background-image, etc.)
         for element in soup.find_all(style=True):
@@ -2434,6 +2553,9 @@ class WaybackDownloader:
             normalized = self._normalize_url(attr_value, base_url)
             is_sqcdn_norm = self._is_squarespace_cdn(normalized)
             if not (self._is_internal_url(normalized) or is_sqcdn_norm):
+                # Another site's file: its own address, not the Wayback one
+                if original:
+                    element[attr_name] = attr_value
                 return
             # Normalizing drops the fragment (#team, a sprite's #icon); the
             # attribute keeps it.
@@ -2487,6 +2609,14 @@ class WaybackDownloader:
                 if not (isinstance(attr_value, str) and self._is_single_url_attr(attr_name, attr_value)):
                     continue
                 attr_value = attr_value.strip()
+                # Text that reads like a URL (alt, title, an input's value,
+                # a meta description) is shown, not loaded: leave it, but a
+                # Wayback-form address still gets its original back.
+                if not (attr_name.startswith("data-") or self._is_url_attr(element, attr_name)):
+                    unwrapped = self._unwrap_wayback(attr_value)
+                    if unwrapped != attr_value:
+                        element[attr_name] = unwrapped
+                    continue
                 if (
                     base_domain in attr_value.lower()
                     or self._is_squarespace_cdn(attr_value)

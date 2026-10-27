@@ -24,8 +24,8 @@ class Config:
         # Output
         self.output_dir: str = get_str_env("OUTPUT_DIR", "./output")
 
-        # HTML optimization
-        self.optimize_html: bool = get_bool_env("OPTIMIZE_HTML", True)
+        # HTML minification, opt-in: it drops spaces that render between inline elements
+        self.optimize_html: bool = get_bool_env("OPTIMIZE_HTML", False)
 
         # Image optimization
         self.optimize_images: bool = get_bool_env("OPTIMIZE_IMAGES", False)

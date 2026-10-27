@@ -323,7 +323,7 @@ GLYPHICONS = (
 
 class TestFontCleanupKeepsTheRestOfTheCss:
     def test_legacy_removal_does_not_cross_rules(self):
-        css = ".a{background:url(a.png)}.b{color:red}@font-face{font-family:F;src:url(f.eot)}"
+        css = ".a{background:url(a.png)}.b{color:red}@font-face{font-family:F;src:url(f.eot),url(f.woff)}"
         result = _make_downloader()._remove_legacy_font_formats_from_css(css)
         assert "url(a.png)" in result
         assert ".b{color:red}" in result

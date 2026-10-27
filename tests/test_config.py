@@ -13,7 +13,7 @@ class TestConfig:
         os.environ.pop("WAYBACK_URL", None)
         config = Config()
 
-        assert config.optimize_html is True
+        assert config.optimize_html is False
         assert config.optimize_images is False
         assert config.minify_js is False
         assert config.minify_css is False

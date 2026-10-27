@@ -20,10 +20,10 @@ A boolean is true when set to `true`, `1`, `yes` or `on` (any case); any other v
 
 | Variable | Default | Description |
 |---|---|---|
-| `OPTIMIZE_HTML` | `true` | Minify HTML |
+| `OPTIMIZE_HTML` | `false` | Minify HTML with `minify-html`. Off by default because it changes how pages render: it drops the space between inline elements such as `<span>a</span> <span>b</span>` and collapses text styled `white-space: pre`. It also removes HTML comments |
 | `OPTIMIZE_IMAGES` | `false` | Recompress still images in their own format; animated images are left as they are |
 | `MINIFY_JS` | `false` | Minify JavaScript |
-| `MINIFY_CSS` | `false` | Minify CSS |
+| `MINIFY_CSS` | `false` | Minify CSS with `rcssmin`, which keeps `calc()` and `@supports` valid |
 
 ## Content Removal
 
