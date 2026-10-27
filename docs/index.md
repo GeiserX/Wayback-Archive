@@ -115,7 +115,6 @@ flowchart LR
 - It reads the Wayback Machine only. A live site is not a valid `WAYBACK_URL`; for live sites use `wget`, `httrack` or [web-mirror](https://github.com/GeiserX/web-mirror).
 - It never fetches the archived site's own domain, or any other host, from the live Internet, with three exceptions: Google Fonts, `code.jquery.com` and Squarespace's CDN, and only for a file the archive lacks. Other external links stay external in the copy.
 - It cannot rebuild what the archive never captured. A page missing at every nearby timestamp is counted under `Files failed` and its links stay broken.
-- It has no resume. A run interrupted with Ctrl-C leaves what it wrote in `OUTPUT_DIR`; the next run starts from the first URL again.
 - It does not run JavaScript. Content a page loaded at runtime from an API is not discovered unless its URL appears in the page's HTML, CSS, JavaScript or `data-*` attributes.
 
 ## Privacy

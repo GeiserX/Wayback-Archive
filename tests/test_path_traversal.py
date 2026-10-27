@@ -80,7 +80,7 @@ class TestResolveOutputPath:
     def test_benign_path_resolves_inside_output_dir(self):
         """A normal asset path lands where it always did."""
         resolved = self.downloader._resolve_output_path("a/b/c.png")
-        assert str(resolved) == "/tmp/wayback-archive-test-output/a/b/c.png"
+        assert resolved.as_posix() == "/tmp/wayback-archive-test-output/a/b/c.png"
 
     @pytest.mark.parametrize("escaping", ["../escape.txt", "a/../../escape.txt", "/etc/passwd"])
     def test_backstop_rejects_escaping_path(self, escaping):
@@ -97,7 +97,7 @@ class TestResolveOutputPath:
         """The containment check does not reject legitimate paths."""
         self.downloader._sanitize_output_relpath = lambda path: path
         resolved = self.downloader._resolve_output_path("a/b/c.png")
-        assert str(resolved) == "/tmp/wayback-archive-test-output/a/b/c.png"
+        assert resolved.as_posix() == "/tmp/wayback-archive-test-output/a/b/c.png"
 
 
 class TestGetLocalPathContainment:

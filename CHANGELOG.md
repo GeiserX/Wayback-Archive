@@ -10,19 +10,43 @@ All notable changes to this project are listed here. The format follows
 
 ### Added
 
-- Docker image on Docker Hub: `geiserx/wayback-archive:<version>` and `:<major>.<minor>`, for amd64 and arm64. It runs as a non-root user and writes to `/output`. There is no `:latest` tag.
-- Python 3.13 and 3.14 are supported and tested; the test suite also runs on macOS.
-- Each release attaches its wheel and sdist to the GitHub release.
+- Command-line flags for every option: `wayback-archive URL [options]` with `-o/--output-dir`, `--max-files`, `--request-delay`, `--version` and an on/off pair for each boolean (`--minify-css` / `--no-minify-css`). A flag wins over the environment, the environment over `./.env`. `--help` works without a URL (#75).
+- A Python API: `wayback_archive.download(wayback_url, output_dir="./output", **options)` (#75).
+- `REQUEST_DELAY` / `--request-delay`: seconds to wait, give or take 20%, before every Wayback request (default 0) (#74, #75).
+- Resume: an interrupted run (Ctrl-C, the Wayback Machine throttling, a `MAX_FILES` stop) saves its progress to `OUTPUT_DIR/.wayback-archive-state.json`, and running the same command again carries on where it stopped instead of starting over (#76).
+- The final summary lists the failed URLs, up to 50 (#76).
+- Docker image on Docker Hub: `drumsergio/wayback-archive:<version>` and `:<major>.<minor>`, for amd64 and arm64. It runs as a non-root user and writes to `/output`. There is no `:latest` tag (#73). Its Docker Hub page follows README.md.
+- Python 3.13 and 3.14 are supported and tested; the test suite also runs on Windows and macOS (#73).
+- Each release attaches its wheel and sdist to the GitHub release (#73).
 
 ### Changed
 
-- Dependency floors are the oldest versions the tool works with (for example `requests>=2.32.0`, `Pillow>=10.0.0`), so installing it no longer forces upgrades of packages you already have. `rcssmin` joins the requirements.
-- PyPI metadata: Internet and Archiving topics instead of Build Tools, keywords, and links to the documentation, this changelog and the issue tracker.
+- **Behaviour change: `OPTIMIZE_HTML` now defaults to off.** minify-html removed the visible space between inline elements and collapsed text styled `white-space: pre`, and no minify-html option avoids it. Set `OPTIMIZE_HTML=true` (or `--optimize-html`) to minify as before (#77).
+- CSS minification (`MINIFY_CSS`) uses `rcssmin` instead of `cssmin`, which broke `calc()` and `@supports` rules (#77).
+- Exit statuses: 0 done, 1 the run failed, 2 bad arguments or settings (a missing URL, a misspelled boolean such as `REMOVE_ADS=ture`), 130 on Ctrl-C. A misspelled boolean used to run silently with the wrong setting, and Ctrl-C used to exit 1. Only `./.env` is read, not one in a parent directory (#75).
+- A page whose URL has a query string (`page?id=1`, `index.php?id=3`) gets its own file (`page__q<hash>.html`) instead of overwriting the first variant; a query of cache-busters only (`v`, `ver`, `_`, `t`, ...) still maps to the plain name (#72).
+- File names are valid on every filesystem: `<>:"|?*` and control characters become `_`, trailing dots and spaces go, names Windows reserves (`CON`, `nul.txt`) get `_` after the stem, and an over-long name is shortened instead of failing (#72).
+- `WAYBACK_URL` is matched case-insensitively and trimmed, and `https:/host` is accepted (#72).
+- Wayback's own 502, 503 and 504 are retried like a 429: up to 5 times, waiting 0, 2, 4, 8 and 16 seconds plus jitter, or as long as `Retry-After` asks, up to 120 seconds. A brief outage no longer loses files (#74).
+- Rewrite fidelity: a reference to another site (a CDN image, an embedded video, a CSS `url()`) points at its real address instead of a Wayback path; HTML comments are kept, IE conditional comments included, and only Wayback's own are removed; only Wayback's own inline scripts are removed; text attributes such as `alt` and `title` are left as written; CSS `url()` keeps its `#fragment`; font clean-up touches only `@font-face` blocks and leaves a legacy-only font its source (#77).
+- `OPTIMIZE_IMAGES` keeps ICC profiles, EXIF and progressive JPEG encoding, and leaves lossless WebP and animated images alone (#77).
+- Every file is written to a temporary name and renamed into place, so a run killed mid-write never leaves a truncated file (#76).
+- Dependency floors are the oldest versions the tool works with (for example `requests>=2.32.0`, `Pillow>=10.0.0`), so installing it no longer forces upgrades of packages you already have (#73).
+- PyPI metadata: Internet and Archiving topics instead of Build Tools, keywords, and links to the documentation, this changelog and the issue tracker (#73).
+
+### Fixed
+
+- SVG images that start with `<!DOCTYPE svg` are kept instead of being dropped as corrupted fonts, and old latin-1 pages keep characters they used to lose (#74).
+- A run whose start page was saved raw but could not be processed now exits 1 instead of reporting success (#76).
+- `Files skipped (duplicates)` counts duplicates; it was always 0 (#76).
 
 ### Security
 
-- Every GitHub Actions workflow runs with a read-only token by default and uses actions pinned to a commit.
-- A manual run of the release workflow builds and checks the package but never publishes it, and a release fails instead of passing when the PyPI token is missing.
+- Every file the tool saves comes from web.archive.org or the live-CDN allowlist (Google Fonts, `code.jquery.com`, the Squarespace CDN): a Wayback answer that redirected to another host is refused, a host such as `evil.com\.fonts.gstatic.com` no longer passes the allowlist, and a live CDN fetch goes over HTTPS on the default port only (#74).
+- No response body larger than 512 MiB is read (#74).
+- Every GitHub Actions workflow runs with a read-only token by default and uses actions pinned to a commit (#73).
+- A manual run of the release workflow builds and checks the package but never publishes it (#73).
+- PyPI releases use Trusted Publishing with attestations: no PyPI token is stored anywhere.
 
 ## [1.5.0] - 2026-09-30
 

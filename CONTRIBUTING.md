@@ -23,6 +23,7 @@ CI runs exactly these, and a pull request merges only when they pass:
 ```bash
 ruff check wayback_archive tests
 ruff format --check wayback_archive tests
+mypy wayback_archive
 pytest tests/ -q
 ```
 
@@ -52,5 +53,6 @@ mkdocs serve
 4. Optional dry run: `gh workflow run release.yml --ref vX.Y.Z` builds and checks the package without publishing it.
 5. Publish a GitHub release for the tag. The release workflow checks that the tag matches `__version__`, publishes to PyPI, attaches the wheel and sdist to the release, and pushes the Docker image.
 
-Publishing needs the repository secrets `PYPI_API_TOKEN`, `DOCKERHUB_USERNAME`
-and `DOCKERHUB_TOKEN`; without them the release fails rather than skipping a step.
+Publishing needs the PyPI trusted publisher (workflow `release.yml`, environment `pypi`)
+and the repository secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`; without them the
+release fails rather than skipping a step.

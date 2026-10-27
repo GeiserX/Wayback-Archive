@@ -50,12 +50,15 @@ jobs:
         pip install -r config/requirements-dev.txt
 
     # ruff replaces flake8 and black: the rules live in pyproject.toml, and a
-    # file that is not formatted fails the build. mypy comes back when the
-    # code passes it.
+    # file that is not formatted fails the build.
     - name: Lint and check formatting with ruff
       run: |
         ruff check wayback_archive tests
         ruff format --check wayback_archive tests
+
+    # The mypy settings live in pyproject.toml.
+    - name: Type check with mypy
+      run: mypy wayback_archive
 
     # Coverage sits above 90%; 85 is a floor that catches a real drop without
     # flapping on small changes.
@@ -74,7 +77,7 @@ jobs:
         /tmp/wheel-check/bin/pip install dist/*.whl
         cd /tmp
         /tmp/wheel-check/bin/python -c "import os, wayback_archive, wayback_archive.downloader; p = os.path.dirname(wayback_archive.__file__); assert 'site-packages' in p, p; print('wheel ok', wayback_archive.__version__, p)"
-        # The console script is installed: with no WAYBACK_URL it exits 1 naming it.
+        # The console script is installed: with no WAYBACK_URL it exits 2 (usage error) naming it.
         if /tmp/wheel-check/bin/wayback-archive > cli.out 2>&1; then cat cli.out; exit 1; fi
         grep WAYBACK_URL cli.out
 
@@ -94,8 +97,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # windows returns once the path tests are separator-neutral, see #72
-        os: [macos-latest]
+        os: [macos-latest, windows-latest]
 
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -124,7 +126,7 @@ jobs:
       run: python -m pytest tests/ -v
 
   # Builds the image the release publishes, without pushing it, and checks the
-  # entrypoint is the CLI: with no WAYBACK_URL it exits 1 naming it.
+  # entrypoint is the CLI: with no WAYBACK_URL it exits 2 (usage error) naming it.
   docker:
     runs-on: ubuntu-latest
     steps:
@@ -147,5 +149,5 @@ jobs:
         status=$?
         set -e
         cat cli.out
-        if [ "$status" -ne 1 ]; then echo "::error::expected exit 1, got $status"; exit 1; fi
+        if [ "$status" -ne 2 ]; then echo "::error::expected exit 2, got $status"; exit 1; fi
         grep WAYBACK_URL cli.out

@@ -11,7 +11,7 @@ from pathlib import Path
 from urllib.parse import parse_qsl, quote, unquote, urlencode, urljoin, urlparse
 
 import requests
-from bs4 import BeautifulSoup, Comment
+from bs4 import BeautifulSoup, Comment, Tag
 from bs4.dammit import EncodingDetector
 from requests.adapters import HTTPAdapter
 from urllib3.exceptions import MaxRetryError
@@ -45,6 +45,18 @@ def _host_matches(url: str, hosts) -> bool:
         return False
     host = (hostname or "").lower().removesuffix(".")
     return bool(host) and any(host == h or host.endswith("." + h) for h in hosts)
+
+
+def _attr_text(tag: Tag, name: str) -> str:
+    """A single-valued attribute (href, src, style...) as a string, "" when absent.
+
+    bs4 types every attribute as a string or a list because class and rel can
+    hold several values; the attributes read through here hold one.
+    """
+    value = tag.get(name)
+    if value is None:
+        return ""
+    return value if isinstance(value, str) else " ".join(value)
 
 
 class _RejectedResponse(Exception):
@@ -301,7 +313,7 @@ class WaybackDownloader:
             return False
 
         url_domain = self._strip_default_port(parsed.netloc.lower(), parsed.scheme).removeprefix("www.")
-        base_domain = self.config.domain.lower().removeprefix("www.")
+        base_domain = (self.config.domain or "").lower().removeprefix("www.")
 
         # Treat Squarespace CDN as internal so we rewrite and download those assets.
         if self._is_squarespace_cdn(url):
@@ -430,7 +442,9 @@ class WaybackDownloader:
         except UnsafeOutputPathError:
             return None
 
-    def _convert_to_wayback_url_with_timestamp(self, url: str, timestamp: str = None, use_iframe: bool = False) -> str:
+    def _convert_to_wayback_url_with_timestamp(
+        self, url: str, timestamp: str | None = None, use_iframe: bool = False
+    ) -> str:
         """Convert a regular URL to a Wayback Machine URL with optional timestamp.
 
         Args:
@@ -1183,7 +1197,7 @@ class WaybackDownloader:
             # Check if font file is corrupted (HTML error page)
             if self._is_corrupted_font(content, url):
                 # Mark as corrupted and don't return it
-                normalized_url = self._normalize_url(url, self.config.base_url)
+                normalized_url = self._normalize_url(url, self.config.base_url or "")
                 self.corrupted_fonts.add(normalized_url)
                 print("         ⚠️  Font file is corrupted (HTML error page) - will be removed from CSS", flush=True)
                 return None
@@ -1205,7 +1219,7 @@ class WaybackDownloader:
                         if variant_response.status_code == 200 and not self._bad_capture_reason(variant_response):
                             content = self._body_of(variant_response)
                             if self._is_corrupted_font(content, url):
-                                normalized_url = self._normalize_url(url, self.config.base_url)
+                                normalized_url = self._normalize_url(url, self.config.base_url or "")
                                 self.corrupted_fonts.add(normalized_url)
                                 print(
                                     "         ⚠️  Font file is corrupted (HTML error page) - will be removed from CSS",
@@ -1436,7 +1450,7 @@ class WaybackDownloader:
             return None
         if parsed.scheme not in ("http", "https") or port not in (None, {"http": 80, "https": 443}[parsed.scheme]):
             return None
-        url = parsed._replace(scheme="https", netloc=parsed.hostname).geturl()
+        url = parsed._replace(scheme="https", netloc=parsed.hostname or "").geturl()
         try:
             print(f"         🔄 Wayback failed, trying CDN: {url[:80]}...", flush=True)
             live_response = self.session.get(url, timeout=10, allow_redirects=False, stream=True)
@@ -1454,7 +1468,7 @@ class WaybackDownloader:
 
         # Check if font file is corrupted
         if self._is_corrupted_font(content, url):
-            normalized_url = self._normalize_url(url, self.config.base_url)
+            normalized_url = self._normalize_url(url, self.config.base_url or "")
             self.corrupted_fonts.add(normalized_url)
             print("         ⚠️  Font file is corrupted (HTML error page) - will be removed from CSS", flush=True)
             return None
@@ -1545,11 +1559,13 @@ class WaybackDownloader:
                 continue
             self._probed_fonts.add(font_url)
 
-            # Try to download and check if corrupted (with quick timeout)
+            # Try to download and check if corrupted (with quick timeout).
+            # _wayback_get applies the guards every Wayback fetch has; an
+            # answer it rejects, like a bad capture, says nothing about the font.
             try:
                 wayback_url = self._convert_to_wayback_url_with_timestamp(font_url)
-                response = self.session.get(wayback_url, timeout=5, allow_redirects=True)
-                if response.status_code == 200:
+                response = self._wayback_get(wayback_url, timeout=5, allow_redirects=True)
+                if response.status_code == 200 and not self._bad_capture_reason(response):
                     if self._is_corrupted_font(response.content, font_url):
                         self.corrupted_fonts.add(font_url)
                         print(f"         ⚠️  Detected corrupted font in CSS: {os.path.basename(font_url)}", flush=True)
@@ -1905,7 +1921,7 @@ class WaybackDownloader:
 
             from PIL import Image
 
-            img = Image.open(BytesIO(content))
+            img: Image.Image = Image.open(BytesIO(content))
 
             # Only re-encode a still image into the format it already is: a
             # favicon.ico came out as JPEG bytes, and an animated GIF as its
@@ -1951,19 +1967,28 @@ class WaybackDownloader:
         (Cloudinary's w_400,c_fill) stays part of it; candidates are
         separated by the comma after a descriptor or at the end of a URL.
         """
-        candidates = []
+        candidates: list[tuple[str, str]] = []
         pos = 0
         while True:
-            pos = re.compile(r"[\s,]*").match(srcset, pos).end()
+            # None of these matches can fail: [\s,]* and [^,]* match the
+            # empty string, and \S+ starts on the non-space character the
+            # separators stopped at.
+            separators = re.compile(r"[\s,]*").match(srcset, pos)
+            assert separators is not None
+            pos = separators.end()
             if pos >= len(srcset):
                 return candidates
-            url = re.compile(r"\S+").match(srcset, pos).group()
+            url_match = re.compile(r"\S+").match(srcset, pos)
+            assert url_match is not None
+            url = url_match.group()
             pos += len(url)
             descriptor = ""
             if url.endswith(","):
                 url = url.rstrip(",")
             else:
-                descriptor = re.compile(r"[^,]*").match(srcset, pos).group()
+                descriptor_match = re.compile(r"[^,]*").match(srcset, pos)
+                assert descriptor_match is not None
+                descriptor = descriptor_match.group()
                 pos += len(descriptor)
                 descriptor = descriptor.strip()
             candidates.append((url, descriptor))
@@ -2136,8 +2161,9 @@ class WaybackDownloader:
                     )
                 elif self._is_url_attr(element, attr_name):
                     element[attr_name] = resolve(value)
-            if isinstance(element.get("style"), str):
-                element["style"] = resolve_css(element["style"])
+            style = element.get("style")
+            if isinstance(style, str):
+                element["style"] = resolve_css(style)
         for style_tag in soup.find_all("style"):
             if style_tag.string:
                 style_tag.string = resolve_css(style_tag.string)
@@ -2153,7 +2179,7 @@ class WaybackDownloader:
         # page's own file, and a base left in the output would re-base them.
         base_tag = soup.find("base", href=True)
         if base_tag is not None:
-            base_url = self._normalize_url(base_tag["href"], base_url)
+            base_url = self._normalize_url(_attr_text(base_tag, "href"), base_url)
             del base_tag["href"]
             if not base_tag.attrs:
                 base_tag.decompose()
@@ -2179,7 +2205,7 @@ class WaybackDownloader:
         # Remove wayback machine script tags by src
         # But preserve cookie consent scripts (cookieyes, etc.) even if they come from external CDNs
         for script in soup.find_all("script", src=True):
-            src = script.get("src", "")
+            src = _attr_text(script, "src")
             # Preserve cookie consent scripts
             if "cookieyes" in src.lower() or "cookie-consent" in src.lower():
                 continue
@@ -2264,10 +2290,11 @@ class WaybackDownloader:
                 # An IE conditional comment is markup: Wayback rewrote the
                 # addresses inside it like any other, so point them back.
                 original_text = str(comment)
-                text = self._WAYBACK_URL_IN_TEXT.sub(
-                    lambda m, t=original_text: self._rewrite_conditional_comment_url(m, t, base_url, links_to_follow),
-                    original_text,
-                )
+
+                def rewrite(m: re.Match[str], t: str = original_text) -> str:
+                    return self._rewrite_conditional_comment_url(m, t, base_url, links_to_follow)
+
+                text = self._WAYBACK_URL_IN_TEXT.sub(rewrite, original_text)
                 if text != comment:
                     comment.replace_with(Comment(text))
             elif any(marker in comment.lower() for marker in self.WAYBACK_COMMENT_MARKERS):
@@ -2278,7 +2305,7 @@ class WaybackDownloader:
             for script in soup.find_all("script", src=True):
                 if script is None:
                     continue
-                script_src = script.get("src")
+                script_src = _attr_text(script, "src")
                 if script_src and self._is_tracker(script_src):
                     script.decompose()
 
@@ -2298,19 +2325,19 @@ class WaybackDownloader:
         # Remove ads
         if self.config.remove_ads:
             for element in soup.find_all(["script", "iframe", "img"], src=True):
-                if self._is_ad(element["src"]):
+                if self._is_ad(_attr_text(element, "src")):
                     element.decompose()
 
         # Remove external iframes
         if self.config.remove_external_iframes:
             for iframe in soup.find_all("iframe", src=True):
-                if not self._is_internal_url(self._unwrap_wayback(iframe["src"])):
+                if not self._is_internal_url(self._unwrap_wayback(_attr_text(iframe, "src"))):
                     iframe.decompose()
 
         # Process frames (<frame src="...">) and internal iframes
         # Frame-based pages (using <frameset>/<frame>) won't render without their frame content
         for frame in soup.find_all(["frame", "iframe"], src=True):
-            src = frame.get("src", "")
+            src = _attr_text(frame, "src")
             if not src:
                 continue
             # Extract wayback URL first
@@ -2332,13 +2359,13 @@ class WaybackDownloader:
                 if normalized_url not in self.config.visited_urls:
                     links_to_follow.append(original_url)
             else:
-                frame["src"] = self._unwrap_wayback(frame["src"])
+                frame["src"] = self._unwrap_wayback(_attr_text(frame, "src"))
 
         # Process links
         for link in soup.find_all("a", href=True):
             if link is None:
                 continue
-            href = link.get("href", "")
+            href = _attr_text(link, "href")
             if not href:
                 continue
             # A same-page fragment or a script link names no other page.
@@ -2347,7 +2374,7 @@ class WaybackDownloader:
 
             # Check if this link is inside a floating buttons container BEFORE processing
             is_floating_button = False
-            parent_classes = []
+            parent_classes: list[str] = []
             parent = link.find_parent()
             while parent and parent.name:  # parent.name checks if it's a valid tag
                 parent_class = parent.get("class")
@@ -2444,12 +2471,12 @@ class WaybackDownloader:
             parent = link.parent
             is_in_icon_group = False
             while parent is not None:
-                parent_classes = parent.get("class", [])
-                if parent_classes:
-                    if isinstance(parent_classes, list):
-                        parent_classes_str = " ".join(parent_classes)
+                parent_class_value = parent.get("class")
+                if parent_class_value:
+                    if isinstance(parent_class_value, list):
+                        parent_classes_str = " ".join(parent_class_value)
                     else:
-                        parent_classes_str = str(parent_classes)
+                        parent_classes_str = str(parent_class_value)
                     if "sppb-icons-group-list" in parent_classes_str or "icons-group" in parent_classes_str.lower():
                         is_in_icon_group = True
                         break
@@ -2481,7 +2508,7 @@ class WaybackDownloader:
                     continue
 
                 # Preserve button links (sppb-btn classes) - these are styled buttons that should remain functional
-                link_classes = link.get("class", [])
+                link_classes = link.get("class")
                 if link_classes and isinstance(link_classes, list):
                     link_classes_str = " ".join(link_classes)
                 elif link_classes:
@@ -2500,12 +2527,12 @@ class WaybackDownloader:
                 parent = link.parent
                 is_in_icon_group = False
                 while parent is not None:
-                    parent_classes = parent.get("class", [])
-                    if parent_classes:
-                        if isinstance(parent_classes, list):
-                            parent_classes_str = " ".join(parent_classes)
+                    parent_class_value = parent.get("class")
+                    if parent_class_value:
+                        if isinstance(parent_class_value, list):
+                            parent_classes_str = " ".join(parent_class_value)
                         else:
-                            parent_classes_str = str(parent_classes)
+                            parent_classes_str = str(parent_class_value)
                         if "sppb-icons-group-list" in parent_classes_str or "icons-group" in parent_classes_str.lower():
                             is_in_icon_group = True
                             break
@@ -2547,7 +2574,9 @@ class WaybackDownloader:
         for meta in soup.find_all("meta", content=True):
             if str(meta.get("http-equiv", "")).lower() != "refresh":
                 continue
-            match = re.match(r"^\s*(\d+)\s*[;,]\s*url\s*=\s*['\"]?(.*?)['\"]?\s*$", meta["content"], re.IGNORECASE)
+            match = re.match(
+                r"^\s*(\d+)\s*[;,]\s*url\s*=\s*['\"]?(.*?)['\"]?\s*$", _attr_text(meta, "content"), re.IGNORECASE
+            )
             if not match:
                 continue
             delay, target = match.groups()
@@ -2567,7 +2596,7 @@ class WaybackDownloader:
 
         # Process images
         for img in soup.find_all("img", src=True):
-            src = img["src"]
+            src = _attr_text(img, "src")
             # Keep original src before processing (for Squarespace CDN detection)
             original_src = src
             # Extract wayback URL first
@@ -2605,7 +2634,7 @@ class WaybackDownloader:
 
         # Process HTML background attributes (legacy <body>, <table>, <td>, <tr>, <th>)
         for elem in soup.find_all(["body", "table", "td", "tr", "th"], attrs={"background": True}):
-            bg = elem.get("background", "")
+            bg = _attr_text(elem, "background")
             if not bg:
                 continue
             original = self._extract_original_url_from_path(bg)
@@ -2621,20 +2650,20 @@ class WaybackDownloader:
                 if normalized_url not in self.config.visited_urls:
                     links_to_follow.append(original_url)
             else:
-                elem["background"] = self._unwrap_wayback(elem["background"])
+                elem["background"] = self._unwrap_wayback(_attr_text(elem, "background"))
 
         # Process srcset everywhere (img, picture > source, link
         # imagesrcset, lazy-load data-srcset): every candidate is rewritten
         # and downloaded, since the browser may pick any of them over src.
         for attr_name in ("srcset", "imagesrcset", "data-srcset"):
-            for element in soup.find_all(attrs={attr_name: True}):
+            for element in soup.find_all(None, {attr_name: True}):
                 srcset = element.get(attr_name, "")
                 if isinstance(srcset, str) and srcset.strip():
                     element[attr_name] = self._rewrite_srcset(srcset, base_url, links_to_follow)
 
         # Process CSS links
         for link in soup.find_all("link", rel="stylesheet", href=True):
-            href = link.get("href", "")
+            href = _attr_text(link, "href")
             if not href:
                 continue
             # Keep original href before processing (for Google Fonts detection)
@@ -2715,7 +2744,7 @@ class WaybackDownloader:
         for script in soup.find_all("script", src=True):
             if script is None:
                 continue
-            src = script.get("src", "")
+            src = _attr_text(script, "src")
             if not src:
                 continue
             # Extract wayback URL first
@@ -2739,7 +2768,7 @@ class WaybackDownloader:
                 if normalized_url not in self.config.visited_urls:
                     links_to_follow.append(original_url)
             else:
-                script["src"] = self._unwrap_wayback(script["src"])
+                script["src"] = self._unwrap_wayback(_attr_text(script, "src"))
 
         # Process SVG use elements with xlink:href attributes
         for use_elem in soup.find_all("use"):
@@ -2796,7 +2825,7 @@ class WaybackDownloader:
             # Skip stylesheets as they're already processed above
             if link_rel and (link_rel == ["stylesheet"] or (isinstance(link_rel, list) and "stylesheet" in link_rel)):
                 continue
-            href = link.get("href", "")
+            href = _attr_text(link, "href")
             if not href:
                 continue
             # Extract wayback URL first
@@ -2824,11 +2853,11 @@ class WaybackDownloader:
                 if normalized_url not in self.config.visited_urls:
                     links_to_follow.append(normalized_url)
             else:
-                link["href"] = self._unwrap_wayback(link["href"])
+                link["href"] = self._unwrap_wayback(_attr_text(link, "href"))
 
         # Process inline styles (background-image, etc.)
         for element in soup.find_all(style=True):
-            style = element["style"]
+            style = _attr_text(element, "style")
             # Extract URLs from inline styles
             style_urls = self._extract_css_urls(style, base_url)
             for style_url in style_urls:
@@ -3020,7 +3049,7 @@ class WaybackDownloader:
             return url
         parsed = urlparse(final)
         host = self._strip_default_port(parsed.netloc.lower(), parsed.scheme)
-        if not host or host.removeprefix("www.") == self.config.domain.lower().removeprefix("www."):
+        if not host or host.removeprefix("www.") == (self.config.domain or "").lower().removeprefix("www."):
             return url
         print(f"         ⚠️  The capture of {url} redirects to {final}; archiving {host} instead", flush=True)
         self.config.base_url = final
