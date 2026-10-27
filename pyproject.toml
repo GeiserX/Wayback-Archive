@@ -60,3 +60,16 @@ ignore = ["E501", "E741"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["wayback_archive"]
+
+# CI runs `mypy wayback_archive`. rjsmin and rcssmin ship no types; bs4,
+# requests and Pillow ship their own. Bodies of unannotated functions are not
+# checked yet (check_untyped_defs would report about 40 errors).
+[tool.mypy]
+python_version = "3.10"
+files = ["wayback_archive"]
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+strict_equality = true
+extra_checks = true
+no_implicit_reexport = true

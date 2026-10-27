@@ -120,14 +120,15 @@ def main(argv=None):
     if not is_valid:
         parser.error(error)
 
+    # The constructor sits inside the outer try so that any failure in it
+    # (an unreadable output directory, say) exits like a failed run.
     try:
-        downloader = WaybackDownloader(config)
-    except ValueError as e:
-        # A URL that is not a Wayback address.
-        print(f"Error: {e}", file=sys.stderr, flush=True)
-        sys.exit(1)
-
-    try:
+        try:
+            downloader = WaybackDownloader(config)
+        except ValueError as e:
+            # A URL that is not a Wayback address.
+            print(f"Error: {e}", file=sys.stderr, flush=True)
+            sys.exit(1)
         downloader.download()
     except KeyboardInterrupt:
         print("\nInterrupted", file=sys.stderr, flush=True)

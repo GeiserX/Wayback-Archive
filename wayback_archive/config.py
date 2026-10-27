@@ -27,6 +27,21 @@ class Config:
     An invalid value is collected in self.errors and reported by validate().
     """
 
+    # The on/off options, set from BOOL_OPTIONS in __init__.
+    optimize_html: bool
+    optimize_images: bool
+    minify_js: bool
+    minify_css: bool
+    remove_trackers: bool
+    remove_ads: bool
+    remove_clickable_contacts: bool
+    remove_external_iframes: bool
+    remove_external_links_keep_anchors: bool
+    remove_external_links_remove_anchors: bool
+    make_internal_links_relative: bool
+    make_non_www: bool
+    make_www: bool
+
     # (attribute, environment variable, default) of every on/off option.
     BOOL_OPTIONS = (
         ("optimize_html", "OPTIMIZE_HTML", False),  # opt-in: minifying drops spaces that render between inline elements

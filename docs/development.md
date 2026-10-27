@@ -16,10 +16,11 @@ CI runs these on every pull request, and each one must pass:
 ```bash
 ruff check wayback_archive tests
 ruff format --check wayback_archive tests
+mypy wayback_archive
 pytest tests/ -q --cov=wayback_archive --cov-fail-under=85
 ```
 
-`ruff format wayback_archive tests` rewrites files in place. The ruff rules live in `pyproject.toml`.
+`ruff format wayback_archive tests` rewrites files in place. The ruff and mypy settings live in `pyproject.toml`.
 
 The tests never reach the network. An autouse guard in `tests/conftest.py` refuses every connection that is not to localhost, so a test that needs a response mocks it or serves it from a local server.
 
