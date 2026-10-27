@@ -26,6 +26,7 @@ Lint, format and test exactly as CI does:
 ```bash
 ruff check wayback_archive tests
 ruff format --check wayback_archive tests
+mypy wayback_archive
 pytest tests/ -q
 ```
 
