@@ -473,8 +473,10 @@ class WaybackDownloader:
         return self._get_relative_link_path(url, kind)
 
     # What may precede "/web/<timestamp>/" in a Wayback reference: a url(
-    # wrapper or quote, then the archive host, either name, any scheme.
-    _WAYBACK_PREFIX = r"""\s*(?:url\(\s*)?["']?\s*(?:https?://(?:web\.)?archive\.org(?::\d+)?)?"""
+    # wrapper or quote, then the archive host (archive.org or any of its
+    # subdomains: web., wayback., web-beta.), any scheme. Matched with
+    # re.IGNORECASE: host names are case-insensitive.
+    _WAYBACK_PREFIX = r"""\s*(?:url\(\s*)?["']?\s*(?:https?://(?:[a-z-]+\.)?archive\.org(?::\d+)?)?"""
 
     def _extract_original_url_from_path(self, path: str) -> str | None:
         """Extract original URL from Wayback Machine path in HTML."""
@@ -491,7 +493,7 @@ class WaybackDownloader:
             # (after an optional url( wrapper or quote): a site's own path
             # such as /blog/web/2020/http://... is not a Wayback reference.
             wayback_url_pattern = self._WAYBACK_PREFIX + r"/web/\d+(?:[a-z]+_)?/(https?://[^\"\s'<>]+)"
-            match = re.match(wayback_url_pattern, path)
+            match = re.match(wayback_url_pattern, path, re.IGNORECASE)
             if match:
                 extracted = match.group(1)
                 extracted = extracted.rstrip(".,;:'\"")
@@ -506,7 +508,7 @@ class WaybackDownloader:
             wayback_protocol_pattern = (
                 self._WAYBACK_PREFIX + r"/web/\d+[a-z]*/(mailto:|tel:|whatsapp:|sms:|callto:)(.+)"
             )
-            match = re.match(wayback_protocol_pattern, path)
+            match = re.match(wayback_protocol_pattern, path, re.IGNORECASE)
             if match:
                 protocol = match.group(1)
                 rest = match.group(2).split("?")[0].split("&")[0]  # Remove query params
@@ -584,7 +586,7 @@ class WaybackDownloader:
     # inside a single path component.
     _PATH_SEPARATORS = re.compile(r"[/\\]")
 
-    def _sanitize_output_relpath(self, path: str) -> str:
+    def _sanitize_output_relpath(self, path: str, max_name_bytes: int | None = None) -> str:
         """
         Collapse a URL-derived path into a safe path relative to output_dir.
 
@@ -597,6 +599,8 @@ class WaybackDownloader:
 
         Args:
             path: A percent-decoded URL path, or a "domain/path" string.
+            max_name_bytes: The longest component to keep, in UTF-8 bytes;
+                MAX_NAME_BYTES when not given.
 
         Returns:
             A relative path using "/" separators that cannot escape upwards.
@@ -619,7 +623,7 @@ class WaybackDownloader:
                     segments.pop()
                 continue
 
-            segments.append(self._portable_name(segment))
+            segments.append(self._portable_name(segment, max_name_bytes or self.MAX_NAME_BYTES))
 
         return "/".join(segments)
 
@@ -631,19 +635,25 @@ class WaybackDownloader:
     # Most filesystems cap one name at 255 bytes; stay well under it so an
     # appended ".html" still fits.
     MAX_NAME_BYTES = 200
+    # What _get_local_path may still add to a name after sanitising it: a
+    # query suffix ("__q" and 10 hex) and ".html". A URL name is capped this
+    # much shorter, so the final name never needs a second cut, which would
+    # drop the .php and the query suffix.
+    NAME_SUFFIX_ROOM = len("__q") + 10 + len(".html")
 
-    def _portable_name(self, name: str) -> str:
+    def _portable_name(self, name: str, max_name_bytes: int) -> str:
         """
         Make one path component valid on Windows, macOS and Linux alike.
 
         Applied on every OS, so an archive made on Linux can be copied to
         Windows as is: forbidden characters become "_", trailing dots and
         spaces go, a reserved name (CON, nul.txt) gets "_" after its stem,
-        and a name over MAX_NAME_BYTES keeps its head and extension around
+        and a name over max_name_bytes keeps its head and extension around
         a hash of the full name.
 
         Args:
             name: One non-empty, non-dot path component.
+            max_name_bytes: The longest name to return, in UTF-8 bytes.
 
         Returns:
             The component to write.
@@ -653,12 +663,12 @@ class WaybackDownloader:
         if stem.upper() in self._WINDOWS_RESERVED:
             name = f"{stem}_{dot}{rest}"
         encoded = name.encode("utf-8")
-        if len(encoded) > self.MAX_NAME_BYTES:
+        if len(encoded) > max_name_bytes:
             ext = os.path.splitext(name)[1]
             if len(ext.encode("utf-8")) > 16:
                 ext = ""
             tag = "~" + hashlib.sha1(encoded).hexdigest()[:8]
-            room = self.MAX_NAME_BYTES - len(tag) - len(ext.encode("utf-8"))
+            room = max_name_bytes - len(tag) - len(ext.encode("utf-8"))
             head = name[: len(name) - len(ext)].encode("utf-8")[:room].decode("utf-8", "ignore")
             name = head + tag + ext
         return name
@@ -820,7 +830,7 @@ class WaybackDownloader:
 
         # Remove leading slashes, collapse duplicate slashes, and resolve
         # "." / ".." segments so archived content cannot escape output_dir.
-        path = self._sanitize_output_relpath(path)
+        path = self._sanitize_output_relpath(path, self.MAX_NAME_BYTES - self.NAME_SUFFIX_ROOM)
 
         # Directories get an index.html *inside* them. Replacing the whole
         # path here instead made every /section/ page overwrite the root

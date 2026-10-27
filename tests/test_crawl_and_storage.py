@@ -286,8 +286,6 @@ class TestOneBadPathFailsOneFile:
     @pytest.mark.parametrize(
         "first, second",
         [
-            # An over-long name no longer fails: it is shortened
-            # (tests/test_url_mapping.py).
             ("/a.png", "/a.png/b.png"),
             ("/a.png/b.png", "/a.png"),
         ],

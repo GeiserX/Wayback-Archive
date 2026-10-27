@@ -99,6 +99,29 @@ class TestLongNames:
         assert len(name.encode()) <= WaybackDownloader.MAX_NAME_BYTES
         assert name.endswith(".jpg") and "�" not in name
 
+    @pytest.mark.parametrize(
+        "path, tail",
+        [
+            (f"/{'z' * 300}.php?id=1", ".php.html"),
+            (f"/{'z' * 300}?id=1", ".html"),
+            (f"/{'z' * 195}.php?id=1", ".php.html"),
+        ],
+    )
+    def test_long_query_page_keeps_extension_and_query_suffix(self, dl, path, tail):
+        name = _name(dl, SITE + path)
+        assert len(name.encode()) <= WaybackDownloader.MAX_NAME_BYTES
+        assert "~" in name and "__q" in name and name.endswith(tail)
+
+    def test_over_long_path_writes_instead_of_failing(self, tmp_path):
+        png = b"\x89PNG\r\n\x1a\nxx"
+        long_path = "/" + "a" * 300 + "/x.png"
+        pages = {
+            f"{SITE}/": f'<html><body><img src="{SITE}{long_path}"></body></html>'.encode(),
+            SITE + long_path: png,
+        }
+        _, _, out, _ = _run(tmp_path, pages)
+        assert "Files failed: 0" in out
+
     def test_crawl_writes_the_long_file(self, tmp_path):
         long = "a" * 300
         png = b"\x89PNG\r\n\x1a\nxx"
@@ -131,6 +154,11 @@ class TestPortableNames:
     def test_windows_rules_apply_on_every_os(self, dl, path, expected):
         assert _name(dl, SITE + path) == expected
 
+    def test_question_mark_in_a_name_is_stored_and_linked_as_underscore(self, dl):
+        dl._current_page_url = f"{SITE}/"
+        assert _name(dl, f"{SITE}/a%3Fb.png") == "a_b.png"
+        assert dl._get_relative_link_path(f"{SITE}/a%3Fb.png", "asset") == "a_b.png"
+
     def test_sanitising_twice_changes_nothing(self, dl):
         for path in ("/CON", "/a%3Ab.png", f"/{'z' * 300}", f"/{'z' * 300}?id=1"):
             name = _name(dl, SITE + path)
@@ -155,6 +183,15 @@ class TestWaybackUrlParsing:
 
 
 class TestWaybackReferences:
+    @pytest.mark.parametrize(
+        "ref", ["https://evil.com/web/2020/https://x.com/a", "https://notarchive.org/web/2020/https://x.com/a"]
+    )
+    def test_other_hosts_are_not_wayback_references(self, dl, ref):
+        assert dl._extract_original_url_from_path(ref) is None
+
+    def test_uppercase_archive_host_mailto_extracts(self, dl):
+        assert dl._extract_original_url_from_path("HTTPS://WEB.ARCHIVE.ORG/web/2020/mailto:a@b.c") == "mailto:a@b.c"
+
     def test_site_path_with_web_segment_is_not_a_wayback_reference(self, dl):
         assert dl._extract_original_url_from_path(f"{SITE}/blog/web/2020/http://x.com/a") is None
         assert dl._extract_original_url_from_path("/blog/web/20200101/https://x.com/a") is None
@@ -167,6 +204,9 @@ class TestWaybackReferences:
             "http://archive.org/web/2020/https://x.com/a",
             "//web.archive.org/web/2020/https://x.com/a",
             "url('/web/2020/https://x.com/a')",
+            "http://wayback.archive.org/web/2020/https://x.com/a",
+            "https://web-beta.archive.org/web/2020/https://x.com/a",
+            "HTTPS://WEB.ARCHIVE.ORG/web/2020/https://x.com/a",
         ],
     )
     def test_wayback_references_still_extract(self, dl, ref):
