@@ -72,7 +72,11 @@ def fake_wayback(monkeypatch):
     real_get = requests.Session.get
 
     def get(self, url, **kwargs):
-        return real_get(self, url.replace("https://web.archive.org/", base, 1), **kwargs)
+        response = real_get(self, url.replace("https://web.archive.org/", base, 1), **kwargs)
+        # The downloader rejects a response whose final URL left web.archive.org,
+        # so the loopback answer has to report the Wayback URL it stood in for.
+        response.url = response.url.replace(base, "https://web.archive.org/", 1)
+        return response
 
     monkeypatch.setattr(requests.Session, "get", get)
     yield server
