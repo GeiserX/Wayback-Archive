@@ -16,8 +16,11 @@ def _version(text):
 
 
 def _ci_matrix():
-    match = re.search(r"python-version:\s*\[([^\]]*)\]", CI)
-    return sorted(_version(v) for v in re.findall(r'"([\d.]+)"', match.group(1)))
+    # The `test` job's matrix is the only list-form python-version; the other
+    # jobs pin one version. A second list would be ignored here, so refuse it.
+    matches = re.findall(r"python-version:\s*\[([^\]]*)\]", CI)
+    assert len(matches) == 1, matches
+    return sorted(_version(v) for v in re.findall(r'"([\d.]+)"', matches[0]))
 
 
 def test_requires_python_is_the_lowest_ci_version():
@@ -39,6 +42,17 @@ def test_pytest_settings_are_loaded(pytestconfig):
     assert pytestconfig.getini("testpaths") == ["tests"]
 
 
+def test_every_action_is_pinned_to_a_commit():
+    # A tag can be moved to other code after review; a commit SHA cannot.
+    for workflow in (ROOT / ".github" / "workflows").glob("*.yml"):
+        for ref in re.findall(r"^\s*(?:- )?uses:\s*(\S+)", workflow.read_text(), re.MULTILINE):
+            assert re.search(r"@[0-9a-f]{40}$", ref), f"{workflow.name}: {ref}"
+
+
+def test_coverage_has_a_floor():
+    assert re.search(r"--cov-fail-under=\d+", CI)
+
+
 def test_ci_gates_can_fail():
     # A step that swallows its own exit code reports green on any result.
     for fake in ("|| true", "--exit-zero", "continue-on-error"):
@@ -55,3 +69,15 @@ def test_ci_installs_the_built_wheel_outside_the_checkout():
     assert "python -m build" in CI
     assert "pip install dist/*.whl" in CI
     assert "'site-packages' in" in CI
+
+
+def test_docs_list_the_commands_ci_runs():
+    # CONTRIBUTING, CLAUDE and AGENTS say "exactly as CI does"; a ruff line in
+    # that block which CI does not run (a formatter that rewrites) misleads.
+    for name in ("CONTRIBUTING.md", "CLAUDE.md", "AGENTS.md"):
+        blocks = [b.split("```", 1)[0] for b in (ROOT / name).read_text().split("```bash\n")[1:]]
+        block = next(b for b in blocks if "ruff check" in b)
+        ruff_lines = [line for line in block.splitlines() if line.startswith("ruff ")]
+        assert ruff_lines, name
+        for line in ruff_lines:
+            assert line in CI, (name, line)

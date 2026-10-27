@@ -9,19 +9,26 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = "GPL-3.0-or-later"
 authors = [{ name = "GeiserX" }]
+keywords = ["wayback-machine", "internet-archive", "web-archive", "offline", "website-downloader", "archiving"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "Topic :: Software Development :: Build Tools",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: System :: Archiving",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
 ]
 dynamic = ["version", "dependencies"]
 
 [project.urls]
 Homepage = "https://github.com/GeiserX/Wayback-Archive"
+Documentation = "https://geiserx.github.io/Wayback-Archive/"
+Changelog = "https://github.com/GeiserX/Wayback-Archive/blob/main/CHANGELOG.md"
+Issues = "https://github.com/GeiserX/Wayback-Archive/issues"
 
 [project.scripts]
 wayback-archive = "wayback_archive.cli:main"

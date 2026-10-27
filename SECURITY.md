@@ -1,36 +1,34 @@
 # Security Policy
 
-## Reporting Security Issues
+## Reporting a vulnerability
 
-**Please do not report security vulnerabilities through public GitHub issues.**
+Do not report security vulnerabilities through public GitHub issues. Use
+GitHub's private vulnerability reporting instead:
 
-Instead, please use GitHub's private vulnerability reporting:
+1. Go to the **Security** tab of this repository.
+2. Click **Report a vulnerability**.
+3. Describe the issue, the version, and the steps or the archived page that triggers it.
 
-1. Go to the **Security** tab of this repository
-2. Click **"Report a vulnerability"**
-3. Fill out the form with details
+You get a first answer within a week. A confirmed issue is fixed in a new
+release, and the advisory is published once that release is on PyPI.
 
-I will respond within **48 hours** and work with you to understand and address the issue.
+## Supported versions
 
-### What to Include
+Only the latest minor release gets security fixes. Today that is 1.5.x; every
+1.4.x version can be made to fetch arbitrary hosts, so upgrade.
 
-- Type of issue (e.g., XSS, SQL injection, authentication bypass)
-- Full paths of affected source files
-- Step-by-step instructions to reproduce
-- Proof-of-concept or exploit code (if possible)
-- Impact assessment and potential attack scenarios
+## What counts as a security issue
 
-## Supported Versions
+The tool downloads pages written by strangers and follows the links in them,
+so the archived content is untrusted input. These are vulnerabilities:
 
-Only the latest version receives security updates. Please always use the most recent release.
+- A request to any host other than `web.archive.org` and the fixed list of
+  CDNs the tool fetches live (Google Fonts, `code.jquery.com`, the Squarespace
+  CDN), for example through a crafted URL in an archived page.
+- A file written, overwritten or deleted outside `OUTPUT_DIR`, for example
+  through `..` or an absolute path in an archived URL.
+- Code from an archived page running on the machine that runs the tool.
 
-## Security Best Practices for Contributors
-
-1. **Never commit secrets** — use environment variables
-2. **Validate all input** — especially from external sources
-3. **Keep dependencies updated** — Dependabot is enabled on this repo
-4. **Follow the principle of least privilege** in all code
-
-## Contact
-
-For security questions that aren't vulnerabilities, open a regular issue or reach out via the repository's Discussions tab.
+A script in an archived page that runs in your browser when you open the
+offline copy is not one of them: the copy reproduces the site as it was.
+Open copies of sites you do not trust with care.

@@ -55,6 +55,22 @@ start output\index.html       # Windows
 
 A browser that blocks scripts on `file://` pages can use a local server instead: `cd output && python3 -m http.server 8000`, then open `http://localhost:8000`.
 
+## With Docker
+
+The image runs the same command; pass settings with `-e` and mount a directory on `/output` to keep the copy:
+
+```bash
+docker run --rm \
+  -e WAYBACK_URL="https://web.archive.org/web/20051231235226/http://www.python.org/" \
+  -e MAX_FILES=50 \
+  -v "$PWD/output:/output" \
+  geiserx/wayback-archive:1.6.0
+```
+
+Tags are the release version (`1.6.0`) and its minor line (`1.6`); there is no `latest`.
+
+The container runs as an unprivileged user (uid 1000). On Linux, create `output` before the run (Docker would create it owned by root) and add `--user "$(id -u):$(id -g)"` so the files belong to you.
+
 ## From source
 
 ```bash

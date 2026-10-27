@@ -1,19 +1,6 @@
 name: Docs
 
-# Copy to .github/workflows/docs.yml. Before the first run, set the repository's
-# Pages source to "GitHub Actions": Settings -> Pages -> Source, or
-# `gh api -X POST repos/GeiserX/<repo>/pages -f build_type=workflow` for a repo
-# with no Pages yet. For a repo already publishing from a branch the API is a
-# PUT, and its docs list `source.branch` and `source.path` as required, so the
-# bare `-f build_type=workflow` PUT may 422: try it on CashPilot first and
-# record which form worked. A deploy while the source is still a branch is
-# expected to fail; that is the test that the switch happened.
-#
-# Never for a repo whose gh-pages branch holds a Helm chart index (index.yaml,
-# artifacthub-repo.yml): Pumperly, LynxPrompt, genieacs-container,
-# duplicacy-container. Those use docs-pages-helm.yml instead.
-#
-# Pull requests that touch the docs run the strict build, so a broken link, a
+# Every pull request runs the strict build, so a broken link, a
 # missing page or an unreachable page fails the check instead of reaching the
 # site. A push to main deploys, and only after the same build has passed.
 #
@@ -27,12 +14,9 @@ on:
       - 'docs/**'
       - 'mkdocs.yml'
       - '.github/workflows/docs.yml'
-      # Add every file a page includes with pymdownx.snippets (for example
-      # docker-compose.yml, .env.example): a change to it must rebuild the
-      # site, and a rename must fail the build.
   # No paths filter on pull requests, on purpose: a check skipped by a path
-  # filter stays Pending and blocks the merge once it is a required check
-  # (repos.md step 5 makes green checks required). The build takes seconds.
+  # filter stays Pending and blocks the merge, and build (strict) is a
+  # required check. The build takes seconds.
   pull_request:
   workflow_dispatch:
 
