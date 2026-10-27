@@ -8,6 +8,7 @@ is not a dependency.
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -132,7 +133,10 @@ def _image_tags(version, tmp_path):
     return out.read_text().strip().split("=", 1)[1].split(",")
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+@pytest.mark.skipif(
+    sys.platform == "win32" or shutil.which("bash") is None,
+    reason="runs the job's bash script; Windows launches System32's WSL bash before any PATH entry",
+)
 def test_minor_tag_moves_only_for_a_final_release(tmp_path):
     # A prerelease such as 1.6.0rc1 must not move :1.6 off the last final release.
     assert _image_tags("1.6.0", tmp_path) == [
