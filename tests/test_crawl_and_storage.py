@@ -286,7 +286,6 @@ class TestOneBadPathFailsOneFile:
     @pytest.mark.parametrize(
         "first, second",
         [
-            ("/" + "a" * 300 + "/x.png", None),
             ("/a.png", "/a.png/b.png"),
             ("/a.png/b.png", "/a.png"),
         ],

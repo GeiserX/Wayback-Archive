@@ -8,7 +8,7 @@ import posixpath
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
-from urllib.parse import quote, unquote, urljoin, urlparse
+from urllib.parse import parse_qsl, quote, unquote, urlencode, urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup, Comment
@@ -205,17 +205,23 @@ class WaybackDownloader:
         # an alias of web.archive.org.
         match = re.match(
             r"https?://(?:web\.)?archive\.org(?::(?:80|443))?/web/(\d+)(?:[a-z]+_?)?/(.+)",
-            self.config.wayback_url,
+            (self.config.wayback_url or "").strip(),
+            re.IGNORECASE,
         )
         if match:
             timestamp, original_url = match.groups()
-            # Ensure original_url starts with http/https
-            if not original_url.startswith(("http://", "https://")):
+            # Wayback accepts "HTTPS://Host" and "https:/host" (a browser or a
+            # proxy collapsed the double slash); read both as the site URL.
+            scheme = re.match(r"(https?):/+", original_url, re.IGNORECASE)
+            if scheme:
+                original_url = f"{scheme.group(1).lower()}://{original_url[scheme.end() :]}"
+            else:
                 original_url = "http://" + original_url
             # An explicit default port names the same site; keeping it made
-            # every port-less link on the site look external.
+            # every port-less link on the site look external. Host names are
+            # case-insensitive, the path is not.
             parsed_original = urlparse(original_url)
-            netloc = self._strip_default_port(parsed_original.netloc, parsed_original.scheme)
+            netloc = self._strip_default_port(parsed_original.netloc.lower(), parsed_original.scheme)
             original_url = parsed_original._replace(netloc=netloc).geturl()
             self.config.base_url = original_url
             self.config.domain = netloc
@@ -414,7 +420,14 @@ class WaybackDownloader:
             use_iframe: If True, use 'if_' prefix to get unwrapped HTML content (no Wayback interface)
         """
         parsed = urlparse(url)
-        if parsed.scheme in ("http", "https") and parsed.hostname == "web.archive.org" and "@" not in parsed.netloc:
+        if (
+            parsed.scheme in ("http", "https")
+            and "@" not in parsed.netloc
+            and (
+                parsed.hostname == "web.archive.org"
+                or (parsed.hostname == "archive.org" and parsed.path.startswith("/web/"))
+            )
+        ):
             return url
 
         if timestamp is None:
@@ -459,6 +472,12 @@ class WaybackDownloader:
         # attributes do, so they go through the same builder.
         return self._get_relative_link_path(url, kind)
 
+    # What may precede "/web/<timestamp>/" in a Wayback reference: a url(
+    # wrapper or quote, then the archive host (archive.org or any of its
+    # subdomains: web., wayback., web-beta.), any scheme. Matched with
+    # re.IGNORECASE: host names are case-insensitive.
+    _WAYBACK_PREFIX = r"""\s*(?:url\(\s*)?["']?\s*(?:https?://(?:[a-z-]+\.)?archive\.org(?::\d+)?)?"""
+
     def _extract_original_url_from_path(self, path: str) -> str | None:
         """Extract original URL from Wayback Machine path in HTML."""
         if not path or not isinstance(path, str):
@@ -470,9 +489,11 @@ class WaybackDownloader:
                 path = "https:" + path
 
             # Pattern: /web/TIMESTAMP/https://original.com/path and replay variants
-            # such as im_, cs_, js_, jm_, if_, and fw_.
-            wayback_url_pattern = r"(?:https?://web\.archive\.org)?/web/\d+(?:[a-z]+_)?/(https?://[^\"\s'<>]+)"
-            match = re.search(wayback_url_pattern, path)
+            # such as im_, cs_, js_, jm_, if_, and fw_. Anchored at the start
+            # (after an optional url( wrapper or quote): a site's own path
+            # such as /blog/web/2020/http://... is not a Wayback reference.
+            wayback_url_pattern = self._WAYBACK_PREFIX + r"/web/\d+(?:[a-z]+_)?/(https?://[^\"\s'<>]+)"
+            match = re.match(wayback_url_pattern, path, re.IGNORECASE)
             if match:
                 extracted = match.group(1)
                 extracted = extracted.rstrip(".,;:'\"")
@@ -485,9 +506,9 @@ class WaybackDownloader:
             # Pattern for mailto:/tel:/whatsapp: in wayback URLs
             # Handle both /web/... and https://web.archive.org/web/...
             wayback_protocol_pattern = (
-                r"(?:https?://web\.archive\.org)?/web/\d+[a-z]*/(mailto:|tel:|whatsapp:|sms:|callto:)(.+)"
+                self._WAYBACK_PREFIX + r"/web/\d+[a-z]*/(mailto:|tel:|whatsapp:|sms:|callto:)(.+)"
             )
-            match = re.search(wayback_protocol_pattern, path)
+            match = re.match(wayback_protocol_pattern, path, re.IGNORECASE)
             if match:
                 protocol = match.group(1)
                 rest = match.group(2).split("?")[0].split("&")[0]  # Remove query params
@@ -554,10 +575,8 @@ class WaybackDownloader:
             elif not self.config.make_www and self.config.make_non_www and parsed.netloc.startswith("www."):
                 parsed = parsed._replace(netloc=parsed.netloc[4:])
 
-        # Remove fragment and query string for file identification
-        # This ensures URLs with different query params or fragments point to the same file
-        # Preserve query string for asset URLs (e.g., format params on images)
-        # but always drop fragments.
+        # Drop the fragment, which never reaches the server. The query stays:
+        # _get_local_path decides whether it names a different file.
         url_normalized = parsed._replace(fragment="").geturl()
 
         return url_normalized
@@ -567,7 +586,7 @@ class WaybackDownloader:
     # inside a single path component.
     _PATH_SEPARATORS = re.compile(r"[/\\]")
 
-    def _sanitize_output_relpath(self, path: str) -> str:
+    def _sanitize_output_relpath(self, path: str, max_name_bytes: int | None = None) -> str:
         """
         Collapse a URL-derived path into a safe path relative to output_dir.
 
@@ -580,6 +599,8 @@ class WaybackDownloader:
 
         Args:
             path: A percent-decoded URL path, or a "domain/path" string.
+            max_name_bytes: The longest component to keep, in UTF-8 bytes;
+                MAX_NAME_BYTES when not given.
 
         Returns:
             A relative path using "/" separators that cannot escape upwards.
@@ -602,9 +623,55 @@ class WaybackDownloader:
                     segments.pop()
                 continue
 
-            segments.append(segment)
+            segments.append(self._portable_name(segment, max_name_bytes or self.MAX_NAME_BYTES))
 
         return "/".join(segments)
+
+    # Names Windows refuses as a file or directory, with any extension.
+    _WINDOWS_RESERVED = frozenset(
+        ["CON", "PRN", "AUX", "NUL"] + [f"{p}{n}" for p in ("COM", "LPT") for n in range(1, 10)]
+    )
+    _WINDOWS_FORBIDDEN = re.compile(r'[<>:"|?*\x01-\x1f]')
+    # Most filesystems cap one name at 255 bytes; stay well under it so an
+    # appended ".html" still fits.
+    MAX_NAME_BYTES = 200
+    # What _get_local_path may still add to a name after sanitising it: a
+    # query suffix ("__q" and 10 hex) and ".html". A URL name is capped this
+    # much shorter, so the final name never needs a second cut, which would
+    # drop the .php and the query suffix.
+    NAME_SUFFIX_ROOM = len("__q") + 10 + len(".html")
+
+    def _portable_name(self, name: str, max_name_bytes: int) -> str:
+        """
+        Make one path component valid on Windows, macOS and Linux alike.
+
+        Applied on every OS, so an archive made on Linux can be copied to
+        Windows as is: forbidden characters become "_", trailing dots and
+        spaces go, a reserved name (CON, nul.txt) gets "_" after its stem,
+        and a name over max_name_bytes keeps its head and extension around
+        a hash of the full name.
+
+        Args:
+            name: One non-empty, non-dot path component.
+            max_name_bytes: The longest name to return, in UTF-8 bytes.
+
+        Returns:
+            The component to write.
+        """
+        name = self._WINDOWS_FORBIDDEN.sub("_", name).rstrip(" .") or "_"
+        stem, dot, rest = name.partition(".")
+        if stem.upper() in self._WINDOWS_RESERVED:
+            name = f"{stem}_{dot}{rest}"
+        encoded = name.encode("utf-8")
+        if len(encoded) > max_name_bytes:
+            ext = os.path.splitext(name)[1]
+            if len(ext.encode("utf-8")) > 16:
+                ext = ""
+            tag = "~" + hashlib.sha1(encoded).hexdigest()[:8]
+            room = max_name_bytes - len(tag) - len(ext.encode("utf-8"))
+            head = name[: len(name) - len(ext)].encode("utf-8")[:room].decode("utf-8", "ignore")
+            name = head + tag + ext
+        return name
 
     def _encode_link_path(self, path: str) -> str:
         """
@@ -709,7 +776,8 @@ class WaybackDownloader:
         """
         Get local file path for a URL.
         This ensures consistent file naming that works with static file servers.
-        Files are saved without query strings or fragments for clean URLs.
+        The fragment never counts; the query counts unless it only busts
+        caches (see _with_query_suffix).
 
         Args:
             url: The URL to place on disk.
@@ -762,7 +830,7 @@ class WaybackDownloader:
 
         # Remove leading slashes, collapse duplicate slashes, and resolve
         # "." / ".." segments so archived content cannot escape output_dir.
-        path = self._sanitize_output_relpath(path)
+        path = self._sanitize_output_relpath(path, self.MAX_NAME_BYTES - self.NAME_SUFFIX_ROOM)
 
         # Directories get an index.html *inside* them. Replacing the whole
         # path here instead made every /section/ page overwrite the root
@@ -770,9 +838,64 @@ class WaybackDownloader:
         if is_directory or not path:
             path = posixpath.join(path, "index.html")
 
+        path = self._with_query_suffix(path, parsed.query)
+
         # A path with no extension is treated as a page unless the reference
         # said otherwise.
         return self._place_in_output(path, kind, self.DEFAULT_EXTENSION)
+
+    # Query keys that only defeat caches: a URL whose query holds nothing
+    # else is the same file as the URL without it.
+    CACHE_BUSTER_KEYS = frozenset(
+        {
+            "v",
+            "ver",
+            "version",
+            "rev",
+            "r",
+            "t",
+            "ts",
+            "_",
+            "cb",
+            "cache",
+            "nocache",
+            "hash",
+            "h",
+            "build",
+            "timestamp",
+            "cachebuster",
+        }
+    )
+
+    def _with_query_suffix(self, path: str, query: str) -> str:
+        """
+        Name the file of a URL whose query picks the content.
+
+        /page?id=1 and /page?id=2 are different pages, so each gets its own
+        file, page__q<hash>.html, with the hash taken over the query's
+        key=value pairs sorted, so their order does not matter. Cache-buster
+        keys (CACHE_BUSTER_KEYS) are left out of the hash, and a query of
+        nothing else keeps the plain name: style.css?ver=5 is style.css.
+
+        Args:
+            path: The relative path the URL maps to.
+            query: The URL's raw query string.
+
+        Returns:
+            path, with "__q<10 hex>" before the file's extension when the
+            query matters.
+        """
+        pairs = sorted(
+            (key, value)
+            for key, value in parse_qsl(query, keep_blank_values=True)
+            if key.lower() not in self.CACHE_BUSTER_KEYS
+        )
+        if not pairs:
+            return path
+        digest = hashlib.sha1(urlencode(pairs).encode("utf-8")).hexdigest()[:10]
+        directory, name = posixpath.split(path)
+        stem, ext = posixpath.splitext(name)
+        return posixpath.join(directory, f"{stem}__q{digest}{ext}")
 
     def _output_relative_url(self, path: Path) -> str:
         """

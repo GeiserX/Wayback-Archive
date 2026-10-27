@@ -184,7 +184,6 @@ class TestLinksArePercentEncoded:
             # '#' would otherwise start a fragment and '?' a query string,
             # so the browser would request the wrong file entirely.
             ("http://example.com/a%23b.png", "a#b.png", "a%23b.png"),
-            ("http://example.com/a%3Fb.png", "a?b.png", "a%3Fb.png"),
             ("http://example.com/img%20name.png", "img name.png", "img%20name.png"),
             ("http://example.com/caf%C3%A9.png", "café.png", "caf%C3%A9.png"),
         ],
