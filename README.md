@@ -38,11 +38,17 @@ Wayback-Archive is a command-line tool that downloads an archived website from t
 
 ```bash
 pipx install wayback-archive
-WAYBACK_URL="https://web.archive.org/web/20051231235226/http://www.python.org/" MAX_FILES=50 wayback-archive
+wayback-archive "https://web.archive.org/web/20051231235226/http://www.python.org/" --max-files 50
 open output/index.html                     # Linux: xdg-open output/index.html
 ```
 
-Use 1.5.0 or later: in 1.4.6 and earlier an archived page can make the tool fetch any host directly and save the response ([#55](https://github.com/GeiserX/Wayback-Archive/pull/55)), and `pipx upgrade wayback-archive` moves an existing install (one made with Python 3.9 needs `pipx reinstall --python python3.10 wayback-archive` instead). Needs Python 3.10 or newer (pip on 3.9 finds no release it can install); `pip install` works too, and the other install paths are in [Getting started](https://geiserx.github.io/Wayback-Archive/getting-started/). That run takes about a minute, ends with a `Download Complete!` block counting the files downloaded, failed and skipped, and opens from disk as the page above: the homepage, its stylesheet and its images are all within the first 50 files. Drop `MAX_FILES` to fetch the whole site. On another site a short run can stop before a stylesheet that is only reached through `@import`, because the crawl fetches files in the order it finds them. There are no flags: every setting is an environment variable, listed in [Configuration](https://geiserx.github.io/Wayback-Archive/configuration/).
+Every option is also an environment variable, so the same run can be written as:
+
+```bash
+WAYBACK_URL="https://web.archive.org/web/20051231235226/http://www.python.org/" MAX_FILES=50 wayback-archive
+```
+
+Use 1.5.0 or later: in 1.4.6 and earlier an archived page can make the tool fetch any host directly and save the response ([#55](https://github.com/GeiserX/Wayback-Archive/pull/55)), and `pipx upgrade wayback-archive` moves an existing install (one made with Python 3.9 needs `pipx reinstall --python python3.10 wayback-archive` instead). Needs Python 3.10 or newer (pip on 3.9 finds no release it can install); `pip install` works too, and the other install paths are in [Getting started](https://geiserx.github.io/Wayback-Archive/getting-started/). That run takes about a minute, ends with a `Download Complete!` block counting the files downloaded, failed and skipped, and opens from disk as the page above: the homepage, its stylesheet and its images are all within the first 50 files. Drop `--max-files` to fetch the whole site. On another site a short run can stop before a stylesheet that is only reached through `@import`, because the crawl fetches files in the order it finds them. Every setting is a flag, an environment variable or a line in a `.env` file, in that order of precedence; `wayback-archive --help` lists them and [Configuration](https://geiserx.github.io/Wayback-Archive/configuration/) explains each one.
 
 ## Documentation
 

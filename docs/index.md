@@ -19,7 +19,7 @@ hide:
 
 ---
 
-**Wayback-Archive** is a command-line tool that rescues a whole website from the [Wayback Machine](https://web.archive.org/). Give it one archived URL and you get a folder that opens in a browser and looks like the site did on that day: every page and asset the crawl can reach, links rewritten to the local copies, the Wayback Machine's toolbar and URL prefixes gone. It installs from PyPI in one command ([Getting started](getting-started.md)) and every setting is an environment variable ([Configuration](configuration.md)).
+**Wayback-Archive** is a command-line tool that rescues a whole website from the [Wayback Machine](https://web.archive.org/). Give it one archived URL and you get a folder that opens in a browser and looks like the site did on that day: every page and asset the crawl can reach, links rewritten to the local copies, the Wayback Machine's toolbar and URL prefixes gone. It installs from PyPI in one command ([Getting started](getting-started.md)) and every setting is a flag or an environment variable ([Configuration](configuration.md)).
 
 <div class="grid cards" markdown>
 
@@ -33,13 +33,13 @@ hide:
 
     ---
 
-    One URL, one command, a quick test with `MAX_FILES`, and how to open the copy on macOS, Linux and Windows.
+    One URL, one command, a quick test with `--max-files`, and how to open the copy on macOS, Linux and Windows.
 
 -   :material-tune: **[Configuration](configuration.md)**
 
     ---
 
-    Every environment variable and its default: output folder, minification, trackers, links, www or not.
+    Every flag, environment variable and default: output folder, minification, trackers, links, www or not.
 
 -   :material-cogs: **[How it works](how-it-works.md)**
 
@@ -51,7 +51,7 @@ hide:
 
 ## The result
 
-A snapshot of python.org from 31 December 2005, rescued with the quick-start command (`MAX_FILES=50`) and opened from the copy. No Wayback toolbar, no `web.archive.org` in the links, the stylesheet and images served from the folder on disk.
+A snapshot of python.org from 31 December 2005, rescued with the quick-start command (`--max-files 50`) and opened from the copy. No Wayback toolbar, no `web.archive.org` in the links, the stylesheet and images served from the folder on disk.
 
 ![The rescued python.org homepage of 31 December 2005, opened from the local copy: the original layout, stylesheet and images, with no Wayback Machine toolbar](images/screenshots/restored.png)
 
@@ -91,7 +91,7 @@ Analytics and ads are removed by default (`REMOVE_TRACKERS`, `REMOVE_ADS`); exte
 ```mermaid
 flowchart LR
     WB[Wayback Machine<br/>web.archive.org]
-    CLI[wayback-archive<br/>one process, settings from the environment]
+    CLI[wayback-archive<br/>one process, settings from flags or the environment]
     Q[Queue of discovered URLs]
     OUT[(OUTPUT_DIR<br/>./output by default)]
     FB[Fallbacks:<br/>other Wayback timestamps,<br/>the nearest good capture,<br/>Google Fonts, code.jquery.com,<br/>the Squarespace CDN]
@@ -102,13 +102,13 @@ flowchart LR
     CLI -. only when a file is missing .-> FB
 ```
 
-1. The page at `WAYBACK_URL` is fetched first.
+1. The page at the Wayback URL you give (`WAYBACK_URL`) is fetched first.
 2. Its HTML, CSS and JavaScript are parsed for links and every new URL joins the queue.
 3. Each queued file is downloaded, parsed the same way, rewritten and written under `OUTPUT_DIR`.
 4. A 404 from the archive is retried at up to three other timestamps. A file still missing is fetched live only when it is hosted on Google Fonts, `code.jquery.com` or the Squarespace CDN; anything else is counted as failed.
 5. When the queue is empty the run prints a `Download Complete!` block with the files downloaded, failed and skipped.
 
-`MAX_FILES` stops the crawl after trying that many files, failed ones included, which is the way to try a big site without waiting for all of it. The crawl fetches files in the order it finds them, so on a site whose stylesheet is only reached through `@import` a short run can stop before it; the quick start's snapshot links its stylesheet directly and has it within the first 50 files. There are no command-line flags: `wayback-archive --help` prints `Error: WAYBACK_URL environment variable is required`. Settings come from the environment or a `.env` file in the working directory. See [How it works](how-it-works.md) for the steps in detail and [Configuration](configuration.md) for every variable.
+`--max-files` (`MAX_FILES`) stops the crawl after trying that many files, failed ones included, which is the way to try a big site without waiting for all of it. The crawl fetches files in the order it finds them, so on a site whose stylesheet is only reached through `@import` a short run can stop before it; the quick start's snapshot links its stylesheet directly and has it within the first 50 files. Settings come from command-line flags, the environment or a `.env` file in the working directory, in that order of precedence; `wayback-archive --help` lists every flag. A Python script can call `wayback_archive.download()` with the same options. See [How it works](how-it-works.md) for the steps in detail and [Configuration](configuration.md) for every option.
 
 ## What it does not do
 
