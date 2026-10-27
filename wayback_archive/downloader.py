@@ -1359,23 +1359,61 @@ class WaybackDownloader:
         if ref.startswith("/"):
             return ref == font_path
         tail = re.sub(r"^(?:\.\.?/)+", "", ref)
-        return bool(tail) and any(
-            ("/" + full).endswith("/" + tail) for full in (font_path.lstrip("/"), f"{font.netloc}{font_path}")
-        )
+        # With no stylesheet to resolve against, a bare file name names only
+        # a font with no folder: a.woff in /css/ is not /fonts/a.woff.
+        if not tail or ("/" not in tail and "/" in font_path.lstrip("/")):
+            return False
+        return any(("/" + full).endswith("/" + tail) for full in (font_path.lstrip("/"), f"{font.netloc}{font_path}"))
 
-    def _remove_corrupted_fonts_from_css(self, css: str) -> str:
+    def _local_font_ref_names(self, reference: str, font_url: str, from_dir: str) -> bool | None:
+        """
+        Whether a page-relative reference names this font's local file.
+
+        Answers None for a reference that is not page-relative, which
+        _font_ref_names then judges.
+        """
+        ref = unquote(re.split(r"[?#]", reference.strip(), maxsplit=1)[0])
+        if not ref or ref.startswith(("/", "//")) or self._HAS_SCHEME.match(ref):
+            return None
+        try:
+            font_file = self._output_relative_url(self._get_local_path(font_url, "asset"))
+        except Exception:
+            return None
+        return posixpath.normpath(posixpath.join(from_dir, ref)) == posixpath.normpath(font_file)
+
+    def _remove_corrupted_fonts_from_css(self, css: str, css_url: str | None = None) -> str:
         """Remove references to corrupted font files from CSS.
 
         This prevents browsers from trying to load HTML error pages as fonts,
         which can break typography. Only @font-face blocks are touched, and a
         reference goes only when its whole path names a corrupted font: two
         fonts sharing a file name in different folders are different fonts.
+
+        Args:
+            css: The CSS, after _rewrite_css_urls.
+            css_url: The URL of the stylesheet or page the CSS belongs to.
+                Its relative references are resolved from that file's local
+                folder; without it they are matched on their path alone.
         """
         if not self.corrupted_fonts:
             return css
 
+        from_dir = None
+        if css_url:
+            try:
+                from_dir = self._output_relative_url(self._get_local_path(css_url).parent)
+            except Exception:
+                from_dir = None
+
+        def names(reference: str, font: str) -> bool:
+            if from_dir is not None:
+                local = self._local_font_ref_names(reference, font, from_dir)
+                if local is not None:
+                    return local
+            return self._font_ref_names(reference, font)
+
         def drop_entry(match):
-            if any(self._font_ref_names(match.group(3), font) for font in self.corrupted_fonts):
+            if any(names(match.group(3), font) for font in self.corrupted_fonts):
                 return ""
             return match.group(0)
 
@@ -1520,9 +1558,16 @@ class WaybackDownloader:
                 return f"url({normalized}{fragment})"
 
             # Another site's file: its own address, not the Wayback one
-            if original:
-                return f"url({self._unwrap_wayback(match.group(1))})"
-            return full_match
+            if not original:
+                return full_match
+            value = match.group(1)
+            if re.search(r"\s", value):
+                # The extractor stops at whitespace, which only a quoted
+                # url() can hold: strip the prefix and keep the quotes.
+                quote = re.match(r"url\s*\(\s*([\"']?)", full_match, re.IGNORECASE).group(1)
+                unwrapped = self._WAYBACK_PREFIX.sub("", value, count=1)
+                return f"url({quote}{unwrapped}{quote})" if quote and unwrapped != value else full_match
+            return f"url({self._unwrap_wayback(value)})"
 
         def replace_bare_import(match):
             """Rewrite @import "path" - the form with no url() wrapper."""
@@ -1752,8 +1797,18 @@ class WaybackDownloader:
             "xlink:href",
         }
     )
-    # <meta content> is a URL only for these names (property= or name=).
-    URL_META_NAMES = frozenset({"og:image", "twitter:image", "msapplication-tileimage"})
+    # <meta content> is a URL only for these names (property=, name= or itemprop=).
+    URL_META_NAMES = frozenset(
+        {
+            "og:image",
+            "og:image:url",
+            "og:image:secure_url",
+            "twitter:image",
+            "twitter:image:src",
+            "msapplication-tileimage",
+            "image",
+        }
+    )
     _SRCSET_ATTRS = ("srcset", "imagesrcset", "data-srcset")
 
     # Text that only Wayback's own inline scripts contain. Plain "__wm" or
@@ -1770,15 +1825,40 @@ class WaybackDownloader:
         "internet archive",
     )
     _HAS_SCHEME = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*:")
+    # The Wayback part in front of an original http(s) address.
+    _WAYBACK_PREFIX = re.compile(r"^(?:(?:https?:)?//web\.archive\.org)?/web/\d+(?:[a-z]+_)?/(?=https?://)")
+    # A Wayback-form http(s) address inside free text, such as a comment.
+    _WAYBACK_URL_IN_TEXT = re.compile(r"(?:(?:https?:)?//web\.archive\.org)?/web/\d+(?:[a-z]+_)?/https?://[^\"'\s<>]+")
 
     def _is_url_attr(self, element, attr_name: str) -> bool:
         """True when this attribute of this element names something to load or follow."""
         if attr_name in self.URL_ATTRS:
             return True
         if element.name == "meta" and attr_name == "content":
-            meta_name = element.get("property") or element.get("name") or ""
+            meta_name = element.get("property") or element.get("name") or element.get("itemprop") or ""
             return str(meta_name).lower() in self.URL_META_NAMES
         return False
+
+    def _rewrite_conditional_comment_url(self, match, text: str, base_url: str, links_to_follow: list[str]) -> str:
+        """The link to write for a Wayback-form address inside an IE conditional comment."""
+        original = self._extract_original_url_from_path(match.group(0))
+        if not original:
+            return match.group(0)
+        normalized = self._normalize_url(original, base_url)
+        if not self._is_internal_url(normalized):
+            return original
+        if normalized not in self.config.visited_urls and normalized not in links_to_follow:
+            links_to_follow.append(normalized)
+        # The tag the address sits in says what it is (the extension may not).
+        tag = re.search(r"<\s*([a-zA-Z]+)[^<]*$", text[: match.start()])
+        kind = {"script": "script", "link": "stylesheet", "img": "image"}.get(
+            tag.group(1).lower() if tag else "", "asset"
+        )
+        if kind == "stylesheet":
+            self._note_reference_kind(normalized, kind)
+        if not self.config.make_internal_links_relative:
+            return normalized
+        return self._make_relative_path(normalized, kind)
 
     def _resolve_against_base(self, soup: BeautifulSoup, base_url: str) -> None:
         """
@@ -1941,7 +2021,17 @@ class WaybackDownloader:
         # notice and playback timings). The site's own stay: IE conditional
         # comments load scripts and styles, Knockout reads <!-- ko --> as code.
         for comment in soup.find_all(string=lambda text: isinstance(text, Comment)):
-            if any(marker in comment.lower() for marker in self.WAYBACK_COMMENT_MARKERS):
+            if comment.strip().startswith("[if"):
+                # An IE conditional comment is markup: Wayback rewrote the
+                # addresses inside it like any other, so point them back.
+                original_text = str(comment)
+                text = self._WAYBACK_URL_IN_TEXT.sub(
+                    lambda m, t=original_text: self._rewrite_conditional_comment_url(m, t, base_url, links_to_follow),
+                    original_text,
+                )
+                if text != comment:
+                    comment.replace_with(Comment(text))
+            elif any(marker in comment.lower() for marker in self.WAYBACK_COMMENT_MARKERS):
                 comment.extract()
 
         # Remove trackers and analytics
@@ -2518,7 +2608,7 @@ class WaybackDownloader:
             if "web.archive.org" in style or "/web/" in style or "url(" in style:
                 new_style = self._rewrite_css_urls(style, base_url)
                 # Remove references to corrupted fonts from inline styles
-                new_style = self._remove_corrupted_fonts_from_css(new_style)
+                new_style = self._remove_corrupted_fonts_from_css(new_style, self._current_page_url)
                 element["style"] = new_style
 
         # Process <style> tags in HTML (not just inline styles)
@@ -2537,7 +2627,7 @@ class WaybackDownloader:
                 # Rewrite URLs in style tag CSS
                 css_content = self._rewrite_css_urls(css_content, base_url)
                 # Remove references to corrupted fonts
-                css_content = self._remove_corrupted_fonts_from_css(css_content)
+                css_content = self._remove_corrupted_fonts_from_css(css_content, self._current_page_url)
                 style_tag.string = css_content
 
         # The two passes below rewrite URLs left in any attribute. Whatever
@@ -3019,7 +3109,7 @@ class WaybackDownloader:
                             self._current_page_url = previous_page_url
 
                         # Remove references to already-detected corrupted fonts
-                        css = self._remove_corrupted_fonts_from_css(css)
+                        css = self._remove_corrupted_fonts_from_css(css, url)
 
                         # Proactively remove .eot and .svg font format references
                         # These are often corrupted (HTML error pages) and modern browsers don't need them

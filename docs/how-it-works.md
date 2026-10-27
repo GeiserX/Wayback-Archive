@@ -50,7 +50,7 @@ Wayback-Archive/
 | [beautifulsoup4](https://pypi.org/project/beautifulsoup4/) | HTML parsing |
 | [lxml](https://pypi.org/project/lxml/) | Fast HTML/XML parser |
 | [minify-html](https://pypi.org/project/minify-html/) | HTML minification |
-| [cssmin](https://pypi.org/project/cssmin/) | CSS minification |
+| [rcssmin](https://pypi.org/project/rcssmin/) | CSS minification |
 | [rjsmin](https://pypi.org/project/rjsmin/) | JS minification |
 | [Pillow](https://pypi.org/project/Pillow/) | Image optimization |
 | [python-dotenv](https://pypi.org/project/python-dotenv/) | `.env` file support |

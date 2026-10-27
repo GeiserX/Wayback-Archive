@@ -6,6 +6,7 @@ the font clean-up touches only the @font-face rules it means to.
 """
 
 import os
+import re
 from io import BytesIO
 
 import pytest
@@ -99,6 +100,12 @@ class TestExternalReferencesLoseTheWaybackPrefix:
         os.environ.pop("REMOVE_EXTERNAL_IFRAMES", None)
         assert soup.iframe["src"] == "frame.html"
 
+    def test_quoted_external_url_with_a_space_keeps_the_whole_address(self):
+        css = f'.a{{background:url("{W}im_/https://cdn.other.com/a b.png")}}'
+        assert _make_dl()._rewrite_css_urls(css, "https://site.com/s.css") == (
+            '.a{background:url("https://cdn.other.com/a b.png")}'
+        )
+
 
 class TestUrlLikeTextStaysText:
     def test_text_attributes_are_not_rewritten_or_queued(self):
@@ -129,6 +136,19 @@ class TestUrlLikeTextStaysText:
         assert soup.button["formaction"] == "send.html"
         assert soup.div["data-video_src"] == "v.mp4"
         assert "https://site.com/og.png" in links
+
+    def test_every_image_meta_form_goes_local(self):
+        soup, links = _process(
+            _make_dl(),
+            (
+                '<html><head><meta property="og:image:secure_url" content="https://site.com/og.png">'
+                '<meta property="og:image:url" content="https://site.com/og2.png">'
+                '<meta name="twitter:image:src" content="https://site.com/tw.png">'
+                '<meta itemprop="image" content="https://site.com/it.png"></head><body></body></html>'
+            ),
+        )
+        assert [m["content"] for m in soup.find_all("meta")] == ["og.png", "og2.png", "tw.png", "it.png"]
+        assert links == [f"https://site.com/{n}" for n in ("og.png", "og2.png", "tw.png", "it.png")]
 
     def test_base_href_resolves_srcset_and_formaction(self):
         soup, links = _process(
@@ -161,6 +181,22 @@ class TestCommentsAndScripts:
         assert "<!--[if lt IE 9]>" in out
         assert "<!-- ko if: shown -->" in out and "<!-- /ko -->" in out
         assert "WAYBACK" not in out and "ARCHIVED ON" not in out and "playback timings" not in out
+
+    def test_conditional_comment_in_wayback_form_is_kept_and_rewritten(self):
+        out, links = _make_dl()._process_html(
+            (
+                f'<html><head><!--[if lt IE 9]><script src="{WA}js_/https://site.com/h5.js"></script><![endif]-->'
+                f'<!--[if lt IE 8]><link rel="stylesheet" href="{W}cs_/https://site.com/ie7.css"><![endif]-->'
+                f'<!--[if IE]><script src="{W}js_/https://cdn.other.com/r.js"></script><![endif]-->'
+                "</head><body></body></html>"
+            ),
+            "https://site.com/",
+        )
+        assert '<!--[if lt IE 9]><script src="h5.js"></script><![endif]-->' in out
+        assert '<!--[if lt IE 8]><link rel="stylesheet" href="ie7.css"><![endif]-->' in out
+        assert '<script src="https://cdn.other.com/r.js">' in out
+        assert "/web/" not in out
+        assert links == ["https://site.com/h5.js", "https://site.com/ie7.css"]
 
     def test_site_script_naming_the_archive_survives(self):
         soup, _ = _process(
@@ -247,6 +283,21 @@ class TestCorruptedFontMatchesTheWholePath:
         css = "@font-face{src:url(../fonts.gstatic.com/s/roboto/v1/r.woff2) format('woff2'),url(r.ttf)}"
         assert dl._remove_corrupted_fonts_from_css(css) == "@font-face{src:url(r.ttf)}"
 
+    def test_bare_file_name_without_a_stylesheet_names_no_foldered_font(self):
+        dl = _make_dl()
+        dl.corrupted_fonts.add("https://site.com/fonts/a.woff")
+        css = "@font-face{src:url(a.woff),url(x/fonts/a.woff),url(../fonts/a.woff)}"
+        assert dl._remove_corrupted_fonts_from_css(css) == "@font-face{src:url(a.woff),url(x/fonts/a.woff)}"
+
+    def test_relative_reference_resolves_from_the_stylesheet(self):
+        dl = _make_dl()
+        dl.corrupted_fonts.add("https://site.com/fonts/a.woff")
+        css = "@font-face{src:url(a.woff),url(../fonts/a.woff),url(b.woff)}"
+        assert dl._remove_corrupted_fonts_from_css(css, "https://site.com/css/s.css") == (
+            "@font-face{src:url(a.woff),url(b.woff)}"
+        )
+        assert dl._remove_corrupted_fonts_from_css(css, "https://site.com/fonts/f.css") == "@font-face{src:url(b.woff)}"
+
     def test_nothing_outside_font_face_changes(self):
         dl = _make_dl()
         dl.corrupted_fonts.add("https://site.com/fonts/a.woff")
@@ -258,6 +309,15 @@ class TestCssScanAndMinify:
     def test_commented_out_urls_are_not_queued(self):
         css = "/* .old{background:url(/old.png)}\n */ .a{background:url(/new.png)}"
         assert _make_dl()._extract_css_urls(css, "https://site.com/") == ["https://site.com/new.png"]
+
+    def test_the_css_minifier_is_a_declared_dependency(self):
+        """CI and the wheel install config/requirements.txt; an undeclared
+        minifier makes MINIFY_CSS a silent no-op."""
+        from pathlib import Path
+
+        requirements = (Path(__file__).parent.parent / "config" / "requirements.txt").read_text()
+        names = {re.split(r"[<>=!~\[;\s]", line.strip(), maxsplit=1)[0].lower() for line in requirements.splitlines()}
+        assert "rcssmin" in names
 
     def test_minify_keeps_calc_and_supports_valid(self):
         dl = _make_dl(MINIFY_CSS="true")
