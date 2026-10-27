@@ -5,7 +5,7 @@
 3. **CSS processing** -- Extracts font URLs, background images, and `@import` statements; downloads Google Fonts locally; detects corrupted font files
 4. **JS processing** -- Extracts dynamically loaded resources from JavaScript
 5. **Data attributes** -- Scans `data-*` attributes for additional asset URLs
-6. **Iterative crawling** -- Continues discovering and downloading resources until the queue is empty
+6. **Iterative crawling** -- Continues discovering and downloading resources until the queue is empty. Each file is written to a temporary name and renamed into place, so a file on disk is always complete. Progress (the files done, the queue, and how each extensionless URL was named) is saved to `OUTPUT_DIR/.wayback-archive-state.json` every 25 files and on any early stop, so an interrupted run of the same URL resumes instead of starting over; the file is deleted when the queue empties. The final summary counts the files downloaded, failed and skipped, and lists up to 50 failed URLs
 7. **Timeframe fallback** -- For 404 responses, tries up to three other timestamps: a day either side and a week earlier, skipping any that is an archived error or a challenge page and stopping at a 429. Wayback already answers any timestamp with the nearest capture, so closer probes would land on the same answer. A capture that is an archived error (403, 5xx) or a Cloudflare challenge page is replaced by the nearest capture with status 200, found with one query to the Wayback CDX index; when the start page is replaced, the rest of the site is fetched around that capture's timestamp
 8. **URL rewriting** -- Converts all URLs to relative paths for offline serving
 9. **Preservation** -- Maintains icon groups, button links, and cookie consent functionality
