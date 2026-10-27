@@ -97,4 +97,17 @@ The summary at the end lists the URLs that failed, up to 50, so what is missing 
 
 ## Exit status
 
-The command exits with status 1 and a one-line `Error:` message when `WAYBACK_URL` is missing or is not a Wayback Machine URL, when `MAX_FILES` is not a positive whole number, when nothing could be saved because the start page has no usable capture, when the start page was saved raw but could not be processed (so no links were followed), or when the Wayback Machine refused 5 requests in a row (throttling with HTTP 429 or not answering), in which case the files saved so far stay in place and a later run resumes, retrying the refused files first. A 429 is first retried up to three times, waiting as long as its `Retry-After` header asks, up to 30 seconds. Ctrl-C stops the run with status 1 and keeps what was saved. Otherwise a run that saves the start page exits 0, even if some assets failed or `MAX_FILES` stopped it.
+- **0**: the start page was saved, even if some assets failed or `MAX_FILES` stopped the crawl. The summary lists what failed.
+- **1**: the run failed, with a one-line `Error:` message. That happens when `WAYBACK_URL` is not a Wayback Machine URL, when nothing could be saved because the start page has no usable capture, when the start page was saved raw but could not be processed (so no links were followed), or when the Wayback Machine refused 5 requests in a row (see below). Files saved so far stay in place.
+- **2**: bad arguments or settings, caught before anything is downloaded: no Wayback URL, a `MAX_FILES` that is not a positive whole number, a `REQUEST_DELAY` that is not 0 or more seconds, an on/off option that is not one of the accepted values. The command prints its usage line and an `error:` message naming the setting.
+- **130**: stopped with Ctrl-C. The summary is printed, what was saved stays, and the next run resumes.
+
+### When the Wayback Machine refuses
+
+A request the Wayback Machine throttles (HTTP 429) or answers with its own 502, 503 or 504 is retried up to 5 times in total. The waits grow 0, 2, 4, 8 and 16 seconds, each after the first with up to a second of random jitter added. When the answer carries a `Retry-After` header, the tool waits that long instead, but never more than 120 seconds. An answer slower than the timeout is retried twice; a connection that cannot be opened at all is not retried. A 429 or 5xx that is an archived capture (it carries a `memento-datetime` header) is the page as it was captured and is never retried. With `REQUEST_DELAY` set, the tool also waits that many seconds, give or take 20%, before every Wayback request.
+
+A file still refused after its retries is refused for one of three reasons: `throttled` (a 429), `unavailable` (a 5xx, or a read timeout that outlived its retries) or `connection` (no answer). When 5 files in a row are refused, the run stops rather than keep asking. Those 5 are not counted as failed: they go back to the front of the queue, the progress is saved, and the next run fetches them first. The summary is titled `Download stopped early`, and the command then exits 1 with a line such as:
+
+```text
+Error: Stopped: the Wayback Machine refused 5 requests in a row (last: throttled); try again later
+```
