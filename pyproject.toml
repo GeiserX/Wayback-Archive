@@ -40,3 +40,16 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = ["--strict-markers", "--tb=short"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+# E501: ruff format wraps code; long strings and comments are left as they are.
+# E741: single-letter names in tests.
+ignore = ["E501", "E741"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["wayback_archive"]

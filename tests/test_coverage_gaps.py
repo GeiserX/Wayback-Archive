@@ -1,10 +1,9 @@
 """Targeted tests for remaining coverage gaps in downloader.py."""
 
 import os
+from unittest.mock import Mock, patch
+
 import pytest
-from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
-from bs4 import BeautifulSoup
 
 from wayback_archive.config import Config
 from wayback_archive.downloader import WaybackDownloader
@@ -27,8 +26,8 @@ def _cleanup():
 # download_file - deeper 404 fallback paths
 # ===================================================================
 
-class TestDownloadFileFallbacks:
 
+class TestDownloadFileFallbacks:
     def setup_method(self):
         self.dl = _make_dl()
 
@@ -40,6 +39,7 @@ class TestDownloadFileFallbacks:
         import requests
 
         attempt = 0
+
         def mock_get(url, **kwargs):
             nonlocal attempt
             attempt += 1
@@ -48,10 +48,10 @@ class TestDownloadFileFallbacks:
                 resp.status_code = 404
                 error = requests.exceptions.HTTPError(response=resp)
                 resp.raise_for_status = Mock(side_effect=error)
-                resp.content = b''
+                resp.content = b""
             else:
                 resp.status_code = 200
-                resp.content = b'<html><body>Found via timestamp variant</body></html>'
+                resp.content = b"<html><body>Found via timestamp variant</body></html>"
                 resp.raise_for_status = Mock()
             return resp
 
@@ -64,6 +64,7 @@ class TestDownloadFileFallbacks:
         import requests
 
         attempt = 0
+
         def mock_get(url, **kwargs):
             nonlocal attempt
             attempt += 1
@@ -72,10 +73,10 @@ class TestDownloadFileFallbacks:
                 resp.status_code = 404
                 error = requests.exceptions.HTTPError(response=resp)
                 resp.raise_for_status = Mock(side_effect=error)
-                resp.content = b''
+                resp.content = b""
             else:
                 resp.status_code = 200
-                resp.content = b'\x00\x01\x00\x00'  # binary font data
+                resp.content = b"\x00\x01\x00\x00"  # binary font data
                 resp.raise_for_status = Mock()
             return resp
 
@@ -88,6 +89,7 @@ class TestDownloadFileFallbacks:
         import requests
 
         attempt = 0
+
         def mock_get(url, **kwargs):
             nonlocal attempt
             attempt += 1
@@ -97,21 +99,21 @@ class TestDownloadFileFallbacks:
                 resp.status_code = 404
                 error = requests.exceptions.HTTPError(response=resp)
                 resp.raise_for_status = Mock(side_effect=error)
-                resp.content = b''
+                resp.content = b""
             elif attempt <= 3:
                 # Variant attempts return corrupted font (HTML error page)
                 resp.status_code = 200
-                resp.content = b'<!DOCTYPE html><html>Error</html>'
+                resp.content = b"<!DOCTYPE html><html>Error</html>"
                 resp.raise_for_status = Mock()
             else:
                 # Eventually get real font
                 resp.status_code = 200
-                resp.content = b'\x00\x01\x00\x00' + b'\x00' * 50
+                resp.content = b"\x00\x01\x00\x00" + b"\x00" * 50
                 resp.raise_for_status = Mock()
             return resp
 
         self.dl.session.get = mock_get
-        result = self.dl.download_file("http://example.com/font.woff")
+        self.dl.download_file("http://example.com/font.woff")
         # May or may not find it depending on how many variants are tried
         # The key is that it doesn't crash
 
@@ -120,6 +122,7 @@ class TestDownloadFileFallbacks:
         import requests
 
         attempt = 0
+
         def mock_get(url, **kwargs):
             nonlocal attempt
             attempt += 1
@@ -128,19 +131,19 @@ class TestDownloadFileFallbacks:
                 resp.status_code = 404
                 error = requests.exceptions.HTTPError(response=resp)
                 resp.raise_for_status = Mock(side_effect=error)
-                resp.content = b''
+                resp.content = b""
                 return resp
             elif attempt <= 4:
                 raise requests.exceptions.ConnectionError("network down")
             else:
                 resp = Mock()
                 resp.status_code = 200
-                resp.content = b'found it'
+                resp.content = b"found it"
                 resp.raise_for_status = Mock()
                 return resp
 
         self.dl.session.get = mock_get
-        result = self.dl.download_file("http://example.com/style.css")
+        self.dl.download_file("http://example.com/style.css")
         # Should not crash
 
     def test_404_live_fallback_timeout(self):
@@ -153,7 +156,7 @@ class TestDownloadFileFallbacks:
                 resp.status_code = 404
                 error = requests.exceptions.HTTPError(response=resp)
                 resp.raise_for_status = Mock(side_effect=error)
-                resp.content = b''
+                resp.content = b""
                 return resp
             else:
                 raise requests.exceptions.Timeout("live timeout")
@@ -172,12 +175,12 @@ class TestDownloadFileFallbacks:
                 resp.status_code = 404
                 error = requests.exceptions.HTTPError(response=resp)
                 resp.raise_for_status = Mock(side_effect=error)
-                resp.content = b''
+                resp.content = b""
                 return resp
             else:
                 resp.status_code = 500
                 resp.raise_for_status = Mock(side_effect=requests.exceptions.HTTPError(response=resp))
-                resp.content = b''
+                resp.content = b""
                 return resp
 
         self.dl.session.get = mock_get
@@ -189,6 +192,7 @@ class TestDownloadFileFallbacks:
         import requests
 
         attempt = 0
+
         def mock_get(url, **kwargs):
             nonlocal attempt
             attempt += 1
@@ -196,7 +200,7 @@ class TestDownloadFileFallbacks:
                 raise requests.exceptions.Timeout()
             resp = Mock()
             resp.status_code = 200
-            resp.content = b'<!DOCTYPE html>Error page'
+            resp.content = b"<!DOCTYPE html>Error page"
             resp.raise_for_status = Mock()
             return resp
 
@@ -209,6 +213,7 @@ class TestDownloadFileFallbacks:
         import requests
 
         attempt = 0
+
         def mock_get(url, **kwargs):
             nonlocal attempt
             attempt += 1
@@ -233,7 +238,7 @@ class TestDownloadFileFallbacks:
             resp.headers = {}
             error = requests.exceptions.HTTPError(response=resp)
             resp.raise_for_status = Mock(side_effect=error)
-            resp.content = b''
+            resp.content = b""
             return resp
 
         self.dl.session.get = mock_get
@@ -244,6 +249,7 @@ class TestDownloadFileFallbacks:
     def test_html_if_decode_exception_returns_content(self):
         """If decoding the if_ response fails, content should still be returned."""
         attempt = 0
+
         def mock_get(url, **kwargs):
             nonlocal attempt
             attempt += 1
@@ -251,7 +257,7 @@ class TestDownloadFileFallbacks:
             resp.status_code = 200
             resp.raise_for_status = Mock()
             # Binary content that starts with HTML but can't be fully decoded
-            resp.content = b'<!DOCTYPE html>\xff\xfe' + b'\x00' * 200
+            resp.content = b"<!DOCTYPE html>\xff\xfe" + b"\x00" * 200
             return resp
 
         self.dl.session.get = mock_get
@@ -261,6 +267,7 @@ class TestDownloadFileFallbacks:
     def test_html_if_fails_falls_to_regular(self):
         """If the if_ request raises an exception, should fall through to regular."""
         attempt = 0
+
         def mock_get(url, **kwargs):
             nonlocal attempt
             attempt += 1
@@ -269,7 +276,7 @@ class TestDownloadFileFallbacks:
                 raise Exception("if_ failed")
             resp = Mock()
             resp.status_code = 200
-            resp.content = b'<html><body>Regular page</body></html>'
+            resp.content = b"<html><body>Regular page</body></html>"
             resp.raise_for_status = Mock()
             return resp
 
@@ -282,8 +289,8 @@ class TestDownloadFileFallbacks:
 # _process_html - deeper coverage of floating buttons
 # ===================================================================
 
-class TestFloatingButtonsDeep:
 
+class TestFloatingButtonsDeep:
     def setup_method(self):
         self.dl = _make_dl()
 
@@ -364,8 +371,8 @@ class TestFloatingButtonsDeep:
 # _process_html - CSS stylesheet links with Google Fonts / external
 # ===================================================================
 
-class TestCssStylesheetLinks:
 
+class TestCssStylesheetLinks:
     def setup_method(self):
         self.dl = _make_dl()
 
@@ -382,7 +389,9 @@ class TestCssStylesheetLinks:
         """External stylesheets are kept with remove_anchors: they are not links."""
         self.dl.config.remove_external_links_keep_anchors = False
         self.dl.config.remove_external_links_remove_anchors = True
-        html = '<html><head><link rel="stylesheet" href="http://cdn.other.com/style.css"></head><body>Test</body></html>'
+        html = (
+            '<html><head><link rel="stylesheet" href="http://cdn.other.com/style.css"></head><body>Test</body></html>'
+        )
         processed, _ = self.dl._process_html(html, "http://example.com/")
         assert "href=http://cdn.other.com/style.css" in processed
 
@@ -398,8 +407,8 @@ class TestCssStylesheetLinks:
 # _process_html - script tags deeper coverage
 # ===================================================================
 
-class TestScriptTagProcessing:
 
+class TestScriptTagProcessing:
     def setup_method(self):
         self.dl = _make_dl()
 
@@ -418,8 +427,8 @@ class TestScriptTagProcessing:
 # _process_html - image processing deeper
 # ===================================================================
 
-class TestImageProcessing:
 
+class TestImageProcessing:
     def setup_method(self):
         self.dl = _make_dl()
 
@@ -438,8 +447,8 @@ class TestImageProcessing:
 # _process_html - link tags (non-stylesheet)
 # ===================================================================
 
-class TestNonStylesheetLinks:
 
+class TestNonStylesheetLinks:
     def setup_method(self):
         self.dl = _make_dl()
 
@@ -462,8 +471,8 @@ class TestNonStylesheetLinks:
 # _process_html - SVG use elements
 # ===================================================================
 
-class TestSvgUseElements:
 
+class TestSvgUseElements:
     def setup_method(self):
         self.dl = _make_dl()
 
@@ -487,8 +496,8 @@ class TestSvgUseElements:
 # _process_html - remaining attribute rewriting
 # ===================================================================
 
-class TestRemainingAttributeRewrite:
 
+class TestRemainingAttributeRewrite:
     def setup_method(self):
         self.dl = _make_dl()
 
@@ -521,7 +530,9 @@ class TestRemainingAttributeRewrite:
     def test_squarespace_cdn_attr_not_relative(self):
         """Squarespace CDN attributes when make_internal_links_relative=False."""
         self.dl.config.make_internal_links_relative = False
-        html = '<html><body><div data-bg="https://images.squarespace-cdn.com/content/bg.jpg">Content</div></body></html>'
+        html = (
+            '<html><body><div data-bg="https://images.squarespace-cdn.com/content/bg.jpg">Content</div></body></html>'
+        )
         processed, _ = self.dl._process_html(html, "http://example.com/index.html")
 
     def test_squarespace_cdn_with_query_in_attr(self):
@@ -534,8 +545,8 @@ class TestRemainingAttributeRewrite:
 # _process_html - inline styles with wayback URLs
 # ===================================================================
 
-class TestInlineStyleRewriting:
 
+class TestInlineStyleRewriting:
     def setup_method(self):
         self.dl = _make_dl()
 
@@ -565,8 +576,8 @@ class TestInlineStyleRewriting:
 # _process_html - picture/source srcset deep coverage
 # ===================================================================
 
-class TestPictureSrcsetDeep:
 
+class TestPictureSrcsetDeep:
     def setup_method(self):
         self.dl = _make_dl()
 
@@ -641,8 +652,8 @@ class TestPictureSrcsetDeep:
 # download() main loop - deeper branches
 # ===================================================================
 
-class TestDownloadLoopDeep:
 
+class TestDownloadLoopDeep:
     def teardown_method(self):
         _cleanup()
 
@@ -653,7 +664,7 @@ class TestDownloadLoopDeep:
         dl.config.max_files = 1
         dl.config.base_url = "http://example.com/big.zip"
         # 2MB content
-        dl.download_file = Mock(return_value=b'\x00' * (2 * 1024 * 1024))
+        dl.download_file = Mock(return_value=b"\x00" * (2 * 1024 * 1024))
         dl.download()
 
     def test_download_queue_dedup(self, tmp_path):
@@ -663,14 +674,16 @@ class TestDownloadLoopDeep:
         dl.config.max_files = 2
 
         call_count = 0
+
         def fake_download_file(url):
             nonlocal call_count
             call_count += 1
-            return b'<html><body>Page</body></html>'
+            return b"<html><body>Page</body></html>"
 
         dl.download_file = fake_download_file
         # Return same link twice - should only be queued once
         call_num = 0
+
         def fake_process_html(html, base_url):
             nonlocal call_num
             call_num += 1
@@ -688,7 +701,7 @@ class TestDownloadLoopDeep:
         dl.config.max_files = 1
         dl.config.base_url = "http://example.com/style.css"
         # CSS with duplicate URLs
-        dl.download_file = Mock(return_value=b'body { background: url(/bg.jpg); } .a { background: url(/bg.jpg); }')
+        dl.download_file = Mock(return_value=b"body { background: url(/bg.jpg); } .a { background: url(/bg.jpg); }")
         dl.download()
 
     def test_download_js_with_urls(self, tmp_path):
@@ -728,7 +741,7 @@ class TestDownloadLoopDeep:
         dl = _make_dl()
         dl.config.output_dir = str(tmp_path / "nonexistent" / "deep" / "path")
         dl.config.max_files = 1
-        dl.download_file = Mock(return_value=b'<html><body>Test</body></html>')
+        dl.download_file = Mock(return_value=b"<html><body>Test</body></html>")
         dl._process_html = Mock(return_value=("<html>Test</html>", []))
         # This should not crash even if directory creation fails
         dl.download()
@@ -739,7 +752,7 @@ class TestDownloadLoopDeep:
         dl.config.output_dir = str(tmp_path)
         dl.config.max_files = 1
         # Content with invalid UTF-8 bytes
-        dl.download_file = Mock(return_value=b'<html><body>\xff\xfe Test</body></html>')
+        dl.download_file = Mock(return_value=b"<html><body>\xff\xfe Test</body></html>")
         dl._process_html = Mock(return_value=("<html>Test</html>", []))
         dl.download()
 
@@ -749,7 +762,7 @@ class TestDownloadLoopDeep:
         dl.config.output_dir = str(tmp_path)
         dl.config.max_files = 1
         dl.config.base_url = "http://example.com/style.css"
-        dl.download_file = Mock(return_value=b'body { margin: 0; }')
+        dl.download_file = Mock(return_value=b"body { margin: 0; }")
         dl._extract_css_urls = Mock(side_effect=Exception("parse error"))
         dl.download()
 
@@ -759,7 +772,7 @@ class TestDownloadLoopDeep:
         dl.config.output_dir = str(tmp_path)
         dl.config.max_files = 1
         dl.config.base_url = "http://example.com/file"
-        dl.download_file = Mock(return_value=b'some content')
+        dl.download_file = Mock(return_value=b"some content")
         # This tests the try/except around content type detection
         dl.download()
 
@@ -770,20 +783,20 @@ class TestDownloadLoopDeep:
         dl.config.max_files = 3
 
         call_count = 0
+
         def fake_download_file(url):
             nonlocal call_count
             call_count += 1
             if "style" in url:
-                return b'body { margin: 0; }'
+                return b"body { margin: 0; }"
             if "app" in url:
-                return b'var x = 1;'
-            return b'<html><body>Page</body></html>'
+                return b"var x = 1;"
+            return b"<html><body>Page</body></html>"
 
         dl.download_file = fake_download_file
-        dl._process_html = Mock(return_value=(
-            "<html>Page</html>",
-            ["http://example.com/style.css", "http://example.com/app.js"]
-        ))
+        dl._process_html = Mock(
+            return_value=("<html>Page</html>", ["http://example.com/style.css", "http://example.com/app.js"])
+        )
         dl.download()
 
     def test_download_max_files_with_limit_info(self, tmp_path):
@@ -791,7 +804,7 @@ class TestDownloadLoopDeep:
         dl = _make_dl()
         dl.config.output_dir = str(tmp_path)
         dl.config.max_files = 1
-        dl.download_file = Mock(return_value=b'<html><body>Test</body></html>')
+        dl.download_file = Mock(return_value=b"<html><body>Test</body></html>")
         dl._process_html = Mock(return_value=("<html>Test</html>", ["http://example.com/p2"]))
         dl.download()
 
@@ -800,8 +813,8 @@ class TestDownloadLoopDeep:
 # _rewrite_css_urls - deeper branches
 # ===================================================================
 
-class TestRewriteCssUrlsDeep:
 
+class TestRewriteCssUrlsDeep:
     def setup_method(self):
         self.dl = _make_dl()
         self.dl._current_page_url = "http://example.com/css/style.css"
@@ -822,7 +835,7 @@ class TestRewriteCssUrlsDeep:
         """Squarespace CDN URLs when make_internal_links_relative=False."""
         self.dl.config.make_internal_links_relative = False
         css = "body { background: url(https://images.squarespace-cdn.com/content/bg.jpg); }"
-        result = self.dl._rewrite_css_urls(css, "http://example.com/css/style.css")
+        self.dl._rewrite_css_urls(css, "http://example.com/css/style.css")
 
     def test_external_url_preserved(self):
         """External (non-internal, non-CDN) URLs should be preserved."""
@@ -840,15 +853,15 @@ class TestRewriteCssUrlsDeep:
         """Google Fonts CSS file paths should be handled specially."""
         self.dl.config.make_internal_links_relative = True
         css = "@font-face { src: url(https://fonts.googleapis.com/css?family=Roboto); }"
-        result = self.dl._rewrite_css_urls(css, "http://example.com/css/style.css")
+        self.dl._rewrite_css_urls(css, "http://example.com/css/style.css")
 
 
 # ===================================================================
 # _check_and_remove_corrupted_fonts_in_css - absolute path font URL
 # ===================================================================
 
-class TestCheckCorruptedFontsAbsPath:
 
+class TestCheckCorruptedFontsAbsPath:
     def setup_method(self):
         self.dl = _make_dl()
 
@@ -859,7 +872,7 @@ class TestCheckCorruptedFontsAbsPath:
         """Font with path relative to CSS file should be resolved correctly."""
         mock_response = Mock()
         mock_response.status_code = 200
-        mock_response.content = b'\x00\x01\x00\x00' + b'\x00' * 200
+        mock_response.content = b"\x00\x01\x00\x00" + b"\x00" * 200
         self.dl.session.get = Mock(return_value=mock_response)
 
         css = "@font-face { src: url('fonts/regular.woff'); }"
@@ -870,8 +883,8 @@ class TestCheckCorruptedFontsAbsPath:
 # __main__.py coverage
 # ===================================================================
 
-class TestMainModuleCoverage:
 
+class TestMainModuleCoverage:
     def teardown_method(self):
         os.environ.pop("WAYBACK_URL", None)
 
@@ -882,11 +895,9 @@ class TestMainModuleCoverage:
             # Simulate running __main__ directly
             exec(
                 compile(
-                    "from wayback_archive.cli import main\nif __name__ == '__main__':\n    main()\n",
-                    "<string>",
-                    "exec"
+                    "from wayback_archive.cli import main\nif __name__ == '__main__':\n    main()\n", "<string>", "exec"
                 ),
-                {"__name__": "__main__"}
+                {"__name__": "__main__"},
             )
             mock_main.assert_called_once()
 
@@ -899,8 +910,8 @@ class TestMainModuleCoverage:
 # download() main loop - HTML/CSS/JS processing error paths
 # ===================================================================
 
-class TestDownloadProcessingErrors:
 
+class TestDownloadProcessingErrors:
     def teardown_method(self):
         _cleanup()
 
@@ -910,7 +921,7 @@ class TestDownloadProcessingErrors:
         dl.config.output_dir = str(tmp_path)
         dl.config.max_files = 1
         # Content with bytes that fail strict UTF-8 decoding
-        bad_bytes = b'<html><body>\x80\x81\x82\x83 Content</body></html>'
+        bad_bytes = b"<html><body>\x80\x81\x82\x83 Content</body></html>"
         dl.download_file = Mock(return_value=bad_bytes)
         dl._process_html = Mock(return_value=("<html>Content</html>", []))
         dl.download()
@@ -920,7 +931,7 @@ class TestDownloadProcessingErrors:
         dl = _make_dl()
         dl.config.output_dir = str(tmp_path)
         dl.config.max_files = 1
-        dl.download_file = Mock(return_value=b'<html><body>Test</body></html>')
+        dl.download_file = Mock(return_value=b"<html><body>Test</body></html>")
         dl._process_html = Mock(return_value=("<html>Test</html>", []))
         # Make the output path read-only to trigger write error
         output_file = tmp_path / "index.html"
@@ -938,7 +949,7 @@ class TestDownloadProcessingErrors:
         dl = _make_dl()
         dl.config.output_dir = str(tmp_path)
         dl.config.max_files = 1
-        dl.download_file = Mock(return_value=b'<html><body>Test</body></html>')
+        dl.download_file = Mock(return_value=b"<html><body>Test</body></html>")
         dl._process_html = Mock(side_effect=Exception("parse error"))
         # The raw save should still work via tmp_path
         dl.download()
@@ -950,21 +961,19 @@ class TestDownloadProcessingErrors:
         dl.config.max_files = 3
 
         call_count = 0
+
         def fake_download(url):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return b'<html><body>Main</body></html>'
+                return b"<html><body>Main</body></html>"
             elif call_count == 2:
                 # CSS with internal URL already in queue
-                return b'body { background: url(http://example.com/bg.jpg); } .x { background: url(http://example.com/bg.jpg); }'
-            return b'\x89PNG' + b'\x00' * 50
+                return b"body { background: url(http://example.com/bg.jpg); } .x { background: url(http://example.com/bg.jpg); }"
+            return b"\x89PNG" + b"\x00" * 50
 
         dl.download_file = fake_download
-        dl._process_html = Mock(return_value=(
-            "<html>Main</html>",
-            ["http://example.com/style.css"]
-        ))
+        dl._process_html = Mock(return_value=("<html>Main</html>", ["http://example.com/style.css"]))
         dl.download()
 
     def test_js_url_queue_dedup(self, tmp_path):
@@ -974,18 +983,16 @@ class TestDownloadProcessingErrors:
         dl.config.max_files = 2
 
         call_count = 0
+
         def fake_download(url):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return b'<html><body>Main</body></html>'
+                return b"<html><body>Main</body></html>"
             return b'img.src = "http://example.com/photo.jpg"; other.src = "http://example.com/photo.jpg"'
 
         dl.download_file = fake_download
-        dl._process_html = Mock(return_value=(
-            "<html>Main</html>",
-            ["http://example.com/app.js"]
-        ))
+        dl._process_html = Mock(return_value=("<html>Main</html>", ["http://example.com/app.js"]))
         dl.download()
 
     def test_download_general_processing_exception(self, tmp_path):
@@ -995,16 +1002,18 @@ class TestDownloadProcessingErrors:
         dl.config.max_files = 2
 
         call_count = 0
+
         def fake_download(url):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return b'<html><body>Main</body></html>'
-            return b'some content'
+                return b"<html><body>Main</body></html>"
+            return b"some content"
 
         dl.download_file = fake_download
         # First HTML processing works, but raises in the save portion
         first = True
+
         def fake_process(html, base_url):
             nonlocal first
             if first:
@@ -1022,7 +1031,7 @@ class TestDownloadProcessingErrors:
         dl.config.max_files = 1
         # Use an unusual URL structure where mimetypes might fail
         dl.config.base_url = "http://example.com/font.woff"
-        dl.download_file = Mock(return_value=b'\x00\x01\x00\x00' + b'\x00' * 50)
+        dl.download_file = Mock(return_value=b"\x00\x01\x00\x00" + b"\x00" * 50)
         dl.download()
 
     def test_download_css_with_corrupted_fonts_processing(self, tmp_path):
@@ -1032,16 +1041,13 @@ class TestDownloadProcessingErrors:
         dl.config.max_files = 1
         dl.config.base_url = "http://example.com/style.css"
         dl.corrupted_fonts.add("http://example.com/fonts/broken.woff")
-        dl.download_file = Mock(
-            return_value=b"@font-face { src: url('/fonts/broken.woff'); } body { margin: 0; }"
-        )
+        dl.download_file = Mock(return_value=b"@font-face { src: url('/fonts/broken.woff'); } body { margin: 0; }")
         # Mock the font check to avoid real HTTP
         dl._check_and_remove_corrupted_fonts_in_css = Mock(return_value="body { margin: 0; }")
         dl.download()
 
 
 class TestConfigValidateEdge:
-
     def teardown_method(self):
         os.environ.pop("WAYBACK_URL", None)
 
@@ -1058,6 +1064,7 @@ class TestConfigValidateEdge:
 # ===================================================================
 # Final coverage push - targeted missing lines
 # ===================================================================
+
 
 class TestExtractOriginalUrlException:
     """Cover lines 249-251: exception handler in _extract_original_url_from_path."""
@@ -1094,20 +1101,14 @@ class TestNormalizeUrlRelativeWebPath:
 
     def test_relative_web_path_extracts_original(self):
         """Relative /web/ path should be extracted to original URL."""
-        result = self.dl._normalize_url(
-            "/web/20250417203037/http://example.com/page.html",
-            "http://example.com/"
-        )
+        result = self.dl._normalize_url("/web/20250417203037/http://example.com/page.html", "http://example.com/")
         assert "example.com" in result
         assert "/web/" not in result
 
     def test_relative_web_path_no_extraction_uses_urljoin(self):
         """If /web/ path extraction fails, should use urljoin as fallback."""
         # A /web/ path that doesn't match the extraction pattern
-        result = self.dl._normalize_url(
-            "/web/invalid-no-timestamp",
-            "http://example.com/"
-        )
+        result = self.dl._normalize_url("/web/invalid-no-timestamp", "http://example.com/")
         # Should be resolved via urljoin since extraction fails
         assert result is not None
 
@@ -1124,8 +1125,10 @@ class TestImageOptimization:
 
     def test_optimize_png_asked_as_jpeg_is_left_alone(self):
         """A PNG is never re-encoded as JPEG: that drops its transparency."""
-        from PIL import Image
         from io import BytesIO
+
+        from PIL import Image
+
         # Create an RGBA image
         img = Image.new("RGBA", (10, 10), (255, 0, 0, 128))
         buf = BytesIO()
@@ -1136,8 +1139,10 @@ class TestImageOptimization:
 
     def test_optimize_cmyk_jpeg_conversion(self):
         """A CMYK JPEG is converted to RGB."""
-        from PIL import Image
         from io import BytesIO
+
+        from PIL import Image
+
         img = Image.new("CMYK", (64, 64), (0, 255, 255, 0))
         buf = BytesIO()
         img.save(buf, format="JPEG", quality=100)
@@ -1147,8 +1152,10 @@ class TestImageOptimization:
 
     def test_optimize_palette_png_keeps_its_mode(self):
         """A palette (P) PNG stays a palette PNG."""
-        from PIL import Image
         from io import BytesIO
+
+        from PIL import Image
+
         # Create a palette (P) mode image
         img = Image.new("P", (10, 10))
         buf = BytesIO()
@@ -1159,8 +1166,10 @@ class TestImageOptimization:
 
     def test_optimize_l_mode_preserved(self):
         """L (grayscale) mode images should be processed without conversion."""
-        from PIL import Image
         from io import BytesIO
+
+        from PIL import Image
+
         img = Image.new("L", (10, 10), 128)
         buf = BytesIO()
         img.save(buf, format="PNG")
@@ -1212,13 +1221,13 @@ class TestDownloadLoopJqueryCdnFallback:
 
     def test_jquery_cdn_fallback(self, tmp_path):
         """Failed jquery.min.js should try CDN fallback URLs."""
-        import requests
         dl = _make_dl()
         dl.config.output_dir = str(tmp_path)
         dl.config.max_files = 1
         dl.config.base_url = "http://example.com/jquery.min.js"
 
         call_count = 0
+
         def fake_download(url):
             nonlocal call_count
             call_count += 1
@@ -1230,7 +1239,7 @@ class TestDownloadLoopJqueryCdnFallback:
         # Mock session.get for CDN fallback
         cdn_resp = Mock()
         cdn_resp.status_code = 200
-        cdn_resp.content = b'/* jQuery */'
+        cdn_resp.content = b"/* jQuery */"
         cdn_resp.raise_for_status = Mock()
         dl.session.get = Mock(return_value=cdn_resp)
 
@@ -1265,18 +1274,16 @@ class TestDownloadLoopSkipVisited:
         dl.config.max_files = 2
 
         call_count = 0
+
         def fake_download(url):
             nonlocal call_count
             call_count += 1
-            return b'<html>Page</html>'
+            return b"<html>Page</html>"
 
         dl.download_file = fake_download
         # Pre-add the base URL's normalized form to visited
         # Then it gets added again during processing -> skip
-        dl._process_html = Mock(return_value=(
-            "<html>Page</html>",
-            ["http://example.com/", "http://example.com/page2"]
-        ))
+        dl._process_html = Mock(return_value=("<html>Page</html>", ["http://example.com/", "http://example.com/page2"]))
         dl.download()
 
 
@@ -1291,11 +1298,8 @@ class TestDownloadLoopFragmentSkip:
         dl = _make_dl()
         dl.config.output_dir = str(tmp_path)
         dl.config.max_files = 2
-        dl.download_file = Mock(return_value=b'<html>Page</html>')
-        dl._process_html = Mock(return_value=(
-            "<html>Page</html>",
-            ["#section1", "#section2"]
-        ))
+        dl.download_file = Mock(return_value=b"<html>Page</html>")
+        dl._process_html = Mock(return_value=("<html>Page</html>", ["#section1", "#section2"]))
         dl.download()
 
 
@@ -1326,7 +1330,7 @@ class TestDownloadLoopContentTypeFromPath:
         dl.config.output_dir = str(tmp_path)
         dl.config.max_files = 1
         dl.config.base_url = "http://example.com/doc.pdf"
-        dl.download_file = Mock(return_value=b'%PDF-1.4 content')
+        dl.download_file = Mock(return_value=b"%PDF-1.4 content")
         dl.download()
 
     def test_video_extension(self, tmp_path):
@@ -1334,7 +1338,7 @@ class TestDownloadLoopContentTypeFromPath:
         dl.config.output_dir = str(tmp_path)
         dl.config.max_files = 1
         dl.config.base_url = "http://example.com/video.mp4"
-        dl.download_file = Mock(return_value=b'\x00\x00\x00\x1cftyp')
+        dl.download_file = Mock(return_value=b"\x00\x00\x00\x1cftyp")
         dl.download()
 
     def test_audio_extension(self, tmp_path):
@@ -1342,7 +1346,7 @@ class TestDownloadLoopContentTypeFromPath:
         dl.config.output_dir = str(tmp_path)
         dl.config.max_files = 1
         dl.config.base_url = "http://example.com/audio.mp3"
-        dl.download_file = Mock(return_value=b'ID3\x04\x00')
+        dl.download_file = Mock(return_value=b"ID3\x04\x00")
         dl.download()
 
     def test_font_extension_woff2(self, tmp_path):
@@ -1350,7 +1354,7 @@ class TestDownloadLoopContentTypeFromPath:
         dl.config.output_dir = str(tmp_path)
         dl.config.max_files = 1
         dl.config.base_url = "http://example.com/font.woff2"
-        dl.download_file = Mock(return_value=b'wOF2\x00\x00')
+        dl.download_file = Mock(return_value=b"wOF2\x00\x00")
         dl.download()
 
     def test_image_extension_png(self, tmp_path):
@@ -1358,7 +1362,7 @@ class TestDownloadLoopContentTypeFromPath:
         dl.config.output_dir = str(tmp_path)
         dl.config.max_files = 1
         dl.config.base_url = "http://example.com/icon.png"
-        dl.download_file = Mock(return_value=b'\x89PNG\r\n\x1a\n' + b'\x00' * 50)
+        dl.download_file = Mock(return_value=b"\x89PNG\r\n\x1a\n" + b"\x00" * 50)
         dl.download()
 
     def test_css_content_signature(self, tmp_path):
@@ -1375,7 +1379,7 @@ class TestDownloadLoopContentTypeFromPath:
         dl.config.output_dir = str(tmp_path)
         dl.config.max_files = 1
         dl.config.base_url = "http://example.com/module.mjs"
-        dl.download_file = Mock(return_value=b'export default function() {}')
+        dl.download_file = Mock(return_value=b"export default function() {}")
         dl.download()
 
 
@@ -1450,11 +1454,11 @@ class TestProcessHtmlContactLinksInIconGroup:
 
     def test_contact_in_icon_group_string_class(self):
         """Contact link inside icon group with string class attribute should be preserved."""
-        html = '''<html><body>
+        html = """<html><body>
         <div class="sppb-icons-group-list">
             <a href="tel:+34600000000">Call</a>
         </div>
-        </body></html>'''
+        </body></html>"""
         self.dl.config.remove_clickable_contacts = True
         processed, _ = self.dl._process_html(html, "http://example.com/")
         assert "tel:+34600000000" in processed

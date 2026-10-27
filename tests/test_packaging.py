@@ -28,10 +28,7 @@ def test_requires_python_is_the_lowest_ci_version():
 
 
 def test_classifiers_list_exactly_the_ci_versions():
-    listed = sorted(
-        _version(v)
-        for v in re.findall(r'"Programming Language :: Python :: (\d+\.\d+)"', PYPROJECT)
-    )
+    listed = sorted(_version(v) for v in re.findall(r'"Programming Language :: Python :: (\d+\.\d+)"', PYPROJECT))
     assert listed == _ci_matrix()
 
 

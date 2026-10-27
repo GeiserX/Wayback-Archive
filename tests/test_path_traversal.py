@@ -7,7 +7,9 @@ traversal shape that reaches the same sink.
 """
 
 import os
+
 import pytest
+
 from wayback_archive.config import Config
 from wayback_archive.downloader import UnsafeOutputPathError, WaybackDownloader
 
@@ -17,9 +19,7 @@ class TestSanitizeOutputRelpath:
 
     def setup_method(self):
         """Set up test fixtures."""
-        os.environ["WAYBACK_URL"] = (
-            "https://web.archive.org/web/20250417203037/http://example.com/"
-        )
+        os.environ["WAYBACK_URL"] = "https://web.archive.org/web/20250417203037/http://example.com/"
         self.config = Config()
         self.downloader = WaybackDownloader(self.config)
 
@@ -68,9 +68,7 @@ class TestResolveOutputPath:
 
     def setup_method(self):
         """Set up test fixtures."""
-        os.environ["WAYBACK_URL"] = (
-            "https://web.archive.org/web/20250417203037/http://example.com/"
-        )
+        os.environ["WAYBACK_URL"] = "https://web.archive.org/web/20250417203037/http://example.com/"
         self.config = Config()
         self.config.output_dir = "/tmp/wayback-archive-test-output"
         self.downloader = WaybackDownloader(self.config)
@@ -84,9 +82,7 @@ class TestResolveOutputPath:
         resolved = self.downloader._resolve_output_path("a/b/c.png")
         assert str(resolved) == "/tmp/wayback-archive-test-output/a/b/c.png"
 
-    @pytest.mark.parametrize(
-        "escaping", ["../escape.txt", "a/../../escape.txt", "/etc/passwd"]
-    )
+    @pytest.mark.parametrize("escaping", ["../escape.txt", "a/../../escape.txt", "/etc/passwd"])
     def test_backstop_rejects_escaping_path(self, escaping):
         """With sanitizing disabled, the containment check still refuses.
 
@@ -109,9 +105,7 @@ class TestGetLocalPathContainment:
 
     def setup_method(self):
         """Set up test fixtures."""
-        os.environ["WAYBACK_URL"] = (
-            "https://web.archive.org/web/20250417203037/http://example.com/"
-        )
+        os.environ["WAYBACK_URL"] = "https://web.archive.org/web/20250417203037/http://example.com/"
         self.config = Config()
         self.config.output_dir = "/tmp/wayback-archive-test-output"
         self.downloader = WaybackDownloader(self.config)
@@ -177,9 +171,7 @@ class TestGetLocalPathContainment:
         assert self.downloader._get_relative_link_path(url, "asset") == link
         # The link is relative to the root page, so resolving it against the
         # output root must land on the exact file the downloader writes.
-        assert os.path.realpath(
-            os.path.join(self.config.output_dir, link)
-        ) == os.path.realpath(local_path)
+        assert os.path.realpath(os.path.join(self.config.output_dir, link)) == os.path.realpath(local_path)
 
 
 class TestDownloadTraversalEndToEnd:
@@ -193,25 +185,18 @@ class TestDownloadTraversalEndToEnd:
         "payload_path",
         ["%2e%2e/outside-marker.txt", "../outside-marker.txt"],
     )
-    def test_img_src_traversal_cannot_write_outside_output_dir(
-        self, tmp_path, payload_path
-    ):
+    def test_img_src_traversal_cannot_write_outside_output_dir(self, tmp_path, payload_path):
         """An <img src> traversal must not create a file outside OUTPUT_DIR."""
         output_dir = tmp_path / "output"
         outside = tmp_path / "outside-marker.txt"
 
-        os.environ["WAYBACK_URL"] = (
-            "https://web.archive.org/web/20250417203037/http://example.com/"
-        )
+        os.environ["WAYBACK_URL"] = "https://web.archive.org/web/20250417203037/http://example.com/"
         config = Config()
         config.output_dir = str(output_dir)
         config.max_files = 2
 
         downloader = WaybackDownloader(config)
-        html = (
-            '<html><body><img src="http://example.com/'
-            f'{payload_path}"></body></html>'
-        ).encode()
+        html = (f'<html><body><img src="http://example.com/{payload_path}"></body></html>').encode()
 
         def fake_download_file(url):
             """Serve the malicious page without touching the network."""

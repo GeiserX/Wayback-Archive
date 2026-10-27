@@ -13,7 +13,6 @@ import contextlib
 import io
 import os
 import re
-from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 import pytest
@@ -77,9 +76,7 @@ def _run(tmp_path, pages, wayback_url=None):
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
         dl.download()
-    files = {
-        p.relative_to(output_dir).as_posix() for p in output_dir.rglob("*") if p.is_file()
-    }
+    files = {p.relative_to(output_dir).as_posix() for p in output_dir.rglob("*") if p.is_file()}
     return dl, files, out.getvalue(), output_dir
 
 
@@ -270,9 +267,11 @@ class TestServerSidePages:
             "export.cgi": b"name;value\nA;1\n",
             "src/tool.pl": b"#!/usr/bin/perl\nprint 1 if $a < $b;\n",
         }
-        page = "<html><body>" + "".join(
-            f'<a href="https://example.com/{name}">x</a>' for name in answers
-        ) + "</body></html>"
+        page = (
+            "<html><body>"
+            + "".join(f'<a href="https://example.com/{name}">x</a>' for name in answers)
+            + "</body></html>"
+        )
         pages = {"https://example.com/": page.encode()}
         pages.update({"https://example.com/" + name: body for name, body in answers.items()})
         _, _, out, output_dir = _run(tmp_path, pages)
@@ -359,24 +358,19 @@ class TestTextIsDecodedNotDropped:
         assert "日本語のページ" in html
 
     def test_undeclared_utf8_stays_intact(self, tmp_path):
-        body = "<html><body>Año 日本</body></html>".encode("utf-8")
+        body = "<html><body>Año 日本</body></html>".encode()
         assert "Año 日本" in self._saved(tmp_path, body)
 
     def test_latin1_stylesheet(self, tmp_path):
         page = b'<html><head><link rel="stylesheet" href="https://example.com/s.css"></head><body></body></html>'
         css = '@charset "iso-8859-1"; a:after{content:"Sábado"}'.encode("latin-1")
-        saved = self._saved(
-            tmp_path, page, name="s.css", pages={"https://example.com/s.css": css}
-        )
+        saved = self._saved(tmp_path, page, name="s.css", pages={"https://example.com/s.css": css})
         assert "Sábado" in saved
         # Saved as UTF-8, so the declaration must say so.
         assert '@charset "utf-8"' in saved and "iso-8859-1" not in saved
 
-
     def test_latin1_label_means_windows_1252(self, tmp_path):
-        body = (
-            '<html><head><meta charset="iso-8859-1"></head><body>5\x80 caf\xe9</body></html>'
-        ).encode("latin-1")
+        body = ('<html><head><meta charset="iso-8859-1"></head><body>5\x80 caf\xe9</body></html>').encode("latin-1")
         assert "5€ café" in self._saved(tmp_path, body)
 
     def test_latin1_script(self, tmp_path):
@@ -388,15 +382,16 @@ class TestTextIsDecodedNotDropped:
     def test_utf8_page_with_one_stray_byte(self, tmp_path):
         # A UTF-8 template with one pasted windows-1252 apostrophe.
         body = (
-            '<html><head><meta charset="utf-8"><title>España</title></head>'
-            "<body><p>café it".encode("utf-8") + b"\x92" + "s año</p></body></html>".encode("utf-8")
+            '<html><head><meta charset="utf-8"><title>España</title></head><body><p>café it'.encode()
+            + b"\x92"
+            + "s año</p></body></html>".encode()
         )
         html = self._saved(tmp_path, body)
         assert "España" in html and "café" in html and "año" in html
 
     def test_utf8_stylesheet_with_one_stray_byte(self, tmp_path):
         page = b'<html><head><link rel="stylesheet" href="https://example.com/u.css"></head><body></body></html>'
-        css = 'a:after{content:"España"} /* it'.encode("utf-8") + b"\x92" + b"s */"
+        css = 'a:after{content:"España"} /* it'.encode() + b"\x92" + b"s */"
         saved = self._saved(tmp_path, page, name="u.css", pages={"https://example.com/u.css": css})
         assert "España" in saved
 
@@ -411,10 +406,10 @@ class TestTextIsDecodedNotDropped:
             '<html><head><meta charset="utf-8"><link rel="stylesheet" href="https://example.com/s.css">'
             '<script src="https://example.com/a.js"></script><title>España</title></head>'
             "<body>日本 café</body></html>"
-        ).encode("utf-8")
+        ).encode()
         pages = {
-            "https://example.com/s.css": ('a:after{content:"España ✓"}'.encode("utf-8"), header),
-            "https://example.com/a.js": ('var s = "España 日本";'.encode("utf-8"), header),
+            "https://example.com/s.css": ('a:after{content:"España ✓"}'.encode(), header),
+            "https://example.com/a.js": ('var s = "España 日本";'.encode(), header),
         }
         html = self._saved(tmp_path, page, content_type="text/html; charset=ISO-8859-1", pages=pages)
         assert "España" in html and "日本 café" in html
@@ -470,9 +465,7 @@ class TestWaybackUrlParsing:
         assert dl.original_timestamp == TS
 
     def test_default_port_does_not_make_the_site_external(self):
-        dl = _make_downloader(
-            wayback_url="https://web.archive.org/web/20050301000000/http://www.example.com:80/"
-        )
+        dl = _make_downloader(wayback_url="https://web.archive.org/web/20050301000000/http://www.example.com:80/")
         assert dl.config.domain == "www.example.com"
         html = (
             '<a href="/web/20050301000000/http://www.example.com/about.html">About</a>'
@@ -487,9 +480,7 @@ class TestWaybackUrlParsing:
         # An http://site:80 reference on an https site is the same file; moving
         # it to https must drop the :80 or it names another host.
         dl = _make_downloader()
-        urls = dl._extract_css_urls(
-            "a{background:url(http://example.com:80/bg.png)}", "https://example.com/s.css"
-        )
+        urls = dl._extract_css_urls("a{background:url(http://example.com:80/bg.png)}", "https://example.com/s.css")
         assert urls == ["https://example.com/bg.png"]
         assert dl._is_internal_url(urls[0])
 

@@ -39,6 +39,7 @@ def _no_network(monkeypatch):
                 blocked.append(address)
                 raise RuntimeError(f"test tried a real network connection to {address!r}")
             return real(self, address, *args, **kwargs)
+
         return connect
 
     for name in _PROXY_VARS:

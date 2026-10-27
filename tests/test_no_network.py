@@ -25,7 +25,11 @@ def _run_with_guard(tmp_path, test_body, **env):
     (tmp_path / "test_inner.py").write_text(test_body)
     return subprocess.run(
         [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-o", "addopts=", str(tmp_path)],
-        cwd=tmp_path, env={**os.environ, **env}, capture_output=True, text=True, timeout=60,
+        cwd=tmp_path,
+        env={**os.environ, **env},
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
 
 
@@ -35,11 +39,13 @@ def test_a_loopback_proxy_does_not_bypass_the_guard(tmp_path):
     proxy = "http://127.0.0.1:9"
     result = _run_with_guard(
         tmp_path,
-        "import requests\n\n"
-        "def test_inner():\n"
-        "    requests.get('http://192.0.2.1/', timeout=2)\n",
-        HTTP_PROXY=proxy, HTTPS_PROXY=proxy, http_proxy=proxy, https_proxy=proxy,
-        NO_PROXY="", no_proxy="",
+        "import requests\n\ndef test_inner():\n    requests.get('http://192.0.2.1/', timeout=2)\n",
+        HTTP_PROXY=proxy,
+        HTTPS_PROXY=proxy,
+        http_proxy=proxy,
+        https_proxy=proxy,
+        NO_PROXY="",
+        no_proxy="",
     )
     assert "real network connection to ('192.0.2.1', 80)" in result.stdout, result.stdout
 
