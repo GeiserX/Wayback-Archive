@@ -1840,7 +1840,9 @@ class TestContentTypeDetection:
         content = b"<html><body>Test</body></html>"
         dl.download_file = Mock(return_value=content)
         dl._process_html = Mock(side_effect=Exception("parse error"))
-        dl.download()
+        # The page counts as failed, so the run saved nothing usable.
+        with pytest.raises(RuntimeError, match="Nothing was saved"):
+            dl.download()
         assert (tmp_path / "index.html").read_bytes() == content
 
     def test_squarespace_cdn_in_inline_styles(self, tmp_path):
