@@ -420,7 +420,7 @@ class TestThrottling:
         dl = _make_downloader()
         base = f"http://127.0.0.1:{server.server_port}/"
         adapter = dl.session.get_adapter("https://web.archive.org/web/")
-        adapter.max_retries = adapter.max_retries.new(backoff_factor=0)
+        adapter.max_retries = adapter.max_retries.new(backoff_factor=0, backoff_jitter=0)
         dl.session.mount(base, adapter)
         return dl.session, base
 
@@ -434,15 +434,13 @@ class TestThrottling:
     @pytest.mark.parametrize(
         "status, headers",
         [
-            (503, {}),
-            (503, {"Retry-After": "0"}),
             (413, {"Retry-After": "0"}),
             (429, {"Retry-After": "0", **ARCHIVED}),
         ],
     )
-    def test_5xx_is_not_retried(self, local_server, status, headers):
-        """Only Wayback's own 429 is retried: a 503 or 413 with Retry-After
-        is not, and neither is an archived 429 (it has memento-datetime)."""
+    def test_archived_errors_are_not_retried(self, local_server, status, headers):
+        """A 413 with Retry-After is not retried, and neither is an archived
+        429 (it has memento-datetime)."""
         local_server.answers = [(status, headers), (200, {})]
         session, base = self._session_on(local_server)
         assert session.get(base + "x", timeout=5).status_code == status
@@ -452,12 +450,12 @@ class TestThrottling:
         local_server.answers = [(429, {"Retry-After": "0"})] * 10
         session, base = self._session_on(local_server)
         assert session.get(base + "x", timeout=5).status_code == 429
-        assert local_server.hits <= 4
+        assert local_server.hits <= 6
 
     def test_a_long_retry_after_is_capped(self):
         dl = _make_downloader()
         retry = dl.session.get_adapter("https://web.archive.org/web/").max_retries
-        assert 0 < retry.get_retry_after(_Response(429, headers={"Retry-After": "3600"})) <= 60
+        assert 0 < retry.get_retry_after(_Response(429, headers={"Retry-After": "3600"})) <= 120
 
     def test_only_wayback_gets_the_retrying_adapter(self):
         dl = _make_downloader()

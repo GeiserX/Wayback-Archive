@@ -8,7 +8,7 @@ import posixpath
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
-from urllib.parse import quote, unquote, urljoin, urlparse
+from urllib.parse import parse_qsl, quote, unquote, urlencode, urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup, Comment
@@ -27,20 +27,35 @@ class UnsafeOutputPathError(ValueError):
 def _host_matches(url: str, hosts) -> bool:
     """True when the URL's host is one of hosts or a subdomain of one.
 
-    A URL with userinfo never matches: "trusted.host@elsewhere" connects to
-    the host after the "@".
+    Any authority urllib and requests could read differently never matches:
+    userinfo ("trusted.host@elsewhere" connects after the "@"), a backslash
+    (requests ends the host there, urllib does not), whitespace, "%",
+    control or non-ASCII characters.
     """
-    parsed = urlparse(url)
-    if "@" in parsed.netloc:
+    # urlparse silently drops these, requests does not.
+    if any(c in url for c in "\t\r\n"):
         return False
-    host = (parsed.hostname or "").lower()
-    return any(host == h or host.endswith("." + h) for h in hosts)
+    try:
+        parsed = urlparse(url)
+        hostname = parsed.hostname
+    except ValueError:  # a stray or misplaced bracket
+        return False
+    netloc = parsed.netloc
+    if not netloc.isascii() or any(c in "\\@%" or c.isspace() or not c.isprintable() for c in netloc):
+        return False
+    host = (hostname or "").lower().removesuffix(".")
+    return bool(host) and any(host == h or host.endswith("." + h) for h in hosts)
+
+
+class _RejectedResponse(Exception):
+    """A response that must not be used: it came from a host it should not
+    have, or its body is larger than MAX_BODY_BYTES."""
 
 
 class _PoliteRetry(Retry):
     """Waits out a 429 as Retry-After asks, but never longer than RETRY_AFTER_MAX."""
 
-    RETRY_AFTER_MAX = 30
+    RETRY_AFTER_MAX = 120
     # urllib3 also retries a 503 or 413 that carries Retry-After by default.
     RETRY_AFTER_STATUS_CODES = frozenset({429})
 
@@ -49,8 +64,9 @@ class _PoliteRetry(Retry):
         return None if retry_after is None else min(retry_after, self.RETRY_AFTER_MAX)
 
     def increment(self, method=None, url=None, response=None, error=None, _pool=None, _stacktrace=None):
-        # A 429 with memento-datetime is an archived capture, not throttling;
-        # MaxRetryError makes urllib3 hand it back without retrying.
+        # A 429 or 5xx with memento-datetime is an archived capture, not
+        # Wayback refusing; MaxRetryError makes urllib3 hand it back without
+        # retrying.
         if response is not None and response.headers.get("memento-datetime"):
             raise MaxRetryError(_pool, url, "archived capture")
         return super().increment(method, url, response, error, _pool, _stacktrace)
@@ -155,26 +171,29 @@ class WaybackDownloader:
         self.config = config
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
-        # Wayback throttles with 429: wait and retry a few times. A 5xx, or
-        # an archived 429, is not retried, since Wayback replays archived
-        # error captures as such.
+        # Wayback throttles with 429 and is often briefly down (502, 503,
+        # 504, a read timeout): wait and retry, 0, 2, 4, 8 and 16 s apart
+        # plus jitter. An archived error capture (it has memento-datetime)
+        # is never retried, since Wayback replays those as such.
         self.session.mount(
             "https://web.archive.org/",
             HTTPAdapter(
                 max_retries=_PoliteRetry(
-                    total=3,
+                    total=5,
                     connect=0,
-                    read=0,
+                    read=2,
                     other=0,
-                    status_forcelist=[429],
-                    backoff_factor=2,
+                    status_forcelist=[429, 502, 503, 504],
+                    backoff_factor=1,
+                    backoff_jitter=1,
                     respect_retry_after_header=True,
                     raise_on_status=False,
                 )
             ),
         )
         # Why the last download_file call failed when Wayback refused it:
-        # "throttled" (429) or "connection" (no answer); None otherwise.
+        # "throttled" (429), "unavailable" (5xx or a read timeout after the
+        # retries) or "connection" (no answer); None otherwise.
         self._last_failure: str | None = None
         # Track corrupted font files (HTML error pages instead of actual fonts)
         self.corrupted_fonts: set[str] = set()
@@ -205,17 +224,23 @@ class WaybackDownloader:
         # an alias of web.archive.org.
         match = re.match(
             r"https?://(?:web\.)?archive\.org(?::(?:80|443))?/web/(\d+)(?:[a-z]+_?)?/(.+)",
-            self.config.wayback_url,
+            (self.config.wayback_url or "").strip(),
+            re.IGNORECASE,
         )
         if match:
             timestamp, original_url = match.groups()
-            # Ensure original_url starts with http/https
-            if not original_url.startswith(("http://", "https://")):
+            # Wayback accepts "HTTPS://Host" and "https:/host" (a browser or a
+            # proxy collapsed the double slash); read both as the site URL.
+            scheme = re.match(r"(https?):/+", original_url, re.IGNORECASE)
+            if scheme:
+                original_url = f"{scheme.group(1).lower()}://{original_url[scheme.end() :]}"
+            else:
                 original_url = "http://" + original_url
             # An explicit default port names the same site; keeping it made
-            # every port-less link on the site look external.
+            # every port-less link on the site look external. Host names are
+            # case-insensitive, the path is not.
             parsed_original = urlparse(original_url)
-            netloc = self._strip_default_port(parsed_original.netloc, parsed_original.scheme)
+            netloc = self._strip_default_port(parsed_original.netloc.lower(), parsed_original.scheme)
             original_url = parsed_original._replace(netloc=netloc).geturl()
             self.config.base_url = original_url
             self.config.domain = netloc
@@ -414,7 +439,14 @@ class WaybackDownloader:
             use_iframe: If True, use 'if_' prefix to get unwrapped HTML content (no Wayback interface)
         """
         parsed = urlparse(url)
-        if parsed.scheme in ("http", "https") and parsed.hostname == "web.archive.org" and "@" not in parsed.netloc:
+        if (
+            parsed.scheme in ("http", "https")
+            and "@" not in parsed.netloc
+            and (
+                parsed.hostname == "web.archive.org"
+                or (parsed.hostname == "archive.org" and parsed.path.startswith("/web/"))
+            )
+        ):
             return url
 
         if timestamp is None:
@@ -459,6 +491,12 @@ class WaybackDownloader:
         # attributes do, so they go through the same builder.
         return self._get_relative_link_path(url, kind)
 
+    # What may precede "/web/<timestamp>/" in a Wayback reference: a url(
+    # wrapper or quote, then the archive host (archive.org or any of its
+    # subdomains: web., wayback., web-beta.), any scheme. Matched with
+    # re.IGNORECASE: host names are case-insensitive.
+    _WAYBACK_PREFIX = r"""\s*(?:url\(\s*)?["']?\s*(?:https?://(?:[a-z-]+\.)?archive\.org(?::\d+)?)?"""
+
     def _extract_original_url_from_path(self, path: str) -> str | None:
         """Extract original URL from Wayback Machine path in HTML."""
         if not path or not isinstance(path, str):
@@ -470,9 +508,11 @@ class WaybackDownloader:
                 path = "https:" + path
 
             # Pattern: /web/TIMESTAMP/https://original.com/path and replay variants
-            # such as im_, cs_, js_, jm_, if_, and fw_.
-            wayback_url_pattern = r"(?:https?://web\.archive\.org)?/web/\d+(?:[a-z]+_)?/(https?://[^\"\s'<>]+)"
-            match = re.search(wayback_url_pattern, path)
+            # such as im_, cs_, js_, jm_, if_, and fw_. Anchored at the start
+            # (after an optional url( wrapper or quote): a site's own path
+            # such as /blog/web/2020/http://... is not a Wayback reference.
+            wayback_url_pattern = self._WAYBACK_PREFIX + r"/web/\d+(?:[a-z]+_)?/(https?://[^\"\s'<>]+)"
+            match = re.match(wayback_url_pattern, path, re.IGNORECASE)
             if match:
                 extracted = match.group(1)
                 extracted = extracted.rstrip(".,;:'\"")
@@ -485,9 +525,9 @@ class WaybackDownloader:
             # Pattern for mailto:/tel:/whatsapp: in wayback URLs
             # Handle both /web/... and https://web.archive.org/web/...
             wayback_protocol_pattern = (
-                r"(?:https?://web\.archive\.org)?/web/\d+[a-z]*/(mailto:|tel:|whatsapp:|sms:|callto:)(.+)"
+                self._WAYBACK_PREFIX + r"/web/\d+[a-z]*/(mailto:|tel:|whatsapp:|sms:|callto:)(.+)"
             )
-            match = re.search(wayback_protocol_pattern, path)
+            match = re.match(wayback_protocol_pattern, path, re.IGNORECASE)
             if match:
                 protocol = match.group(1)
                 rest = match.group(2).split("?")[0].split("&")[0]  # Remove query params
@@ -554,10 +594,8 @@ class WaybackDownloader:
             elif not self.config.make_www and self.config.make_non_www and parsed.netloc.startswith("www."):
                 parsed = parsed._replace(netloc=parsed.netloc[4:])
 
-        # Remove fragment and query string for file identification
-        # This ensures URLs with different query params or fragments point to the same file
-        # Preserve query string for asset URLs (e.g., format params on images)
-        # but always drop fragments.
+        # Drop the fragment, which never reaches the server. The query stays:
+        # _get_local_path decides whether it names a different file.
         url_normalized = parsed._replace(fragment="").geturl()
 
         return url_normalized
@@ -567,7 +605,7 @@ class WaybackDownloader:
     # inside a single path component.
     _PATH_SEPARATORS = re.compile(r"[/\\]")
 
-    def _sanitize_output_relpath(self, path: str) -> str:
+    def _sanitize_output_relpath(self, path: str, max_name_bytes: int | None = None) -> str:
         """
         Collapse a URL-derived path into a safe path relative to output_dir.
 
@@ -580,6 +618,8 @@ class WaybackDownloader:
 
         Args:
             path: A percent-decoded URL path, or a "domain/path" string.
+            max_name_bytes: The longest component to keep, in UTF-8 bytes;
+                MAX_NAME_BYTES when not given.
 
         Returns:
             A relative path using "/" separators that cannot escape upwards.
@@ -602,9 +642,55 @@ class WaybackDownloader:
                     segments.pop()
                 continue
 
-            segments.append(segment)
+            segments.append(self._portable_name(segment, max_name_bytes or self.MAX_NAME_BYTES))
 
         return "/".join(segments)
+
+    # Names Windows refuses as a file or directory, with any extension.
+    _WINDOWS_RESERVED = frozenset(
+        ["CON", "PRN", "AUX", "NUL"] + [f"{p}{n}" for p in ("COM", "LPT") for n in range(1, 10)]
+    )
+    _WINDOWS_FORBIDDEN = re.compile(r'[<>:"|?*\x01-\x1f]')
+    # Most filesystems cap one name at 255 bytes; stay well under it so an
+    # appended ".html" still fits.
+    MAX_NAME_BYTES = 200
+    # What _get_local_path may still add to a name after sanitising it: a
+    # query suffix ("__q" and 10 hex) and ".html". A URL name is capped this
+    # much shorter, so the final name never needs a second cut, which would
+    # drop the .php and the query suffix.
+    NAME_SUFFIX_ROOM = len("__q") + 10 + len(".html")
+
+    def _portable_name(self, name: str, max_name_bytes: int) -> str:
+        """
+        Make one path component valid on Windows, macOS and Linux alike.
+
+        Applied on every OS, so an archive made on Linux can be copied to
+        Windows as is: forbidden characters become "_", trailing dots and
+        spaces go, a reserved name (CON, nul.txt) gets "_" after its stem,
+        and a name over max_name_bytes keeps its head and extension around
+        a hash of the full name.
+
+        Args:
+            name: One non-empty, non-dot path component.
+            max_name_bytes: The longest name to return, in UTF-8 bytes.
+
+        Returns:
+            The component to write.
+        """
+        name = self._WINDOWS_FORBIDDEN.sub("_", name).rstrip(" .") or "_"
+        stem, dot, rest = name.partition(".")
+        if stem.upper() in self._WINDOWS_RESERVED:
+            name = f"{stem}_{dot}{rest}"
+        encoded = name.encode("utf-8")
+        if len(encoded) > max_name_bytes:
+            ext = os.path.splitext(name)[1]
+            if len(ext.encode("utf-8")) > 16:
+                ext = ""
+            tag = "~" + hashlib.sha1(encoded).hexdigest()[:8]
+            room = max_name_bytes - len(tag) - len(ext.encode("utf-8"))
+            head = name[: len(name) - len(ext)].encode("utf-8")[:room].decode("utf-8", "ignore")
+            name = head + tag + ext
+        return name
 
     def _encode_link_path(self, path: str) -> str:
         """
@@ -709,7 +795,8 @@ class WaybackDownloader:
         """
         Get local file path for a URL.
         This ensures consistent file naming that works with static file servers.
-        Files are saved without query strings or fragments for clean URLs.
+        The fragment never counts; the query counts unless it only busts
+        caches (see _with_query_suffix).
 
         Args:
             url: The URL to place on disk.
@@ -762,7 +849,7 @@ class WaybackDownloader:
 
         # Remove leading slashes, collapse duplicate slashes, and resolve
         # "." / ".." segments so archived content cannot escape output_dir.
-        path = self._sanitize_output_relpath(path)
+        path = self._sanitize_output_relpath(path, self.MAX_NAME_BYTES - self.NAME_SUFFIX_ROOM)
 
         # Directories get an index.html *inside* them. Replacing the whole
         # path here instead made every /section/ page overwrite the root
@@ -770,9 +857,64 @@ class WaybackDownloader:
         if is_directory or not path:
             path = posixpath.join(path, "index.html")
 
+        path = self._with_query_suffix(path, parsed.query)
+
         # A path with no extension is treated as a page unless the reference
         # said otherwise.
         return self._place_in_output(path, kind, self.DEFAULT_EXTENSION)
+
+    # Query keys that only defeat caches: a URL whose query holds nothing
+    # else is the same file as the URL without it.
+    CACHE_BUSTER_KEYS = frozenset(
+        {
+            "v",
+            "ver",
+            "version",
+            "rev",
+            "r",
+            "t",
+            "ts",
+            "_",
+            "cb",
+            "cache",
+            "nocache",
+            "hash",
+            "h",
+            "build",
+            "timestamp",
+            "cachebuster",
+        }
+    )
+
+    def _with_query_suffix(self, path: str, query: str) -> str:
+        """
+        Name the file of a URL whose query picks the content.
+
+        /page?id=1 and /page?id=2 are different pages, so each gets its own
+        file, page__q<hash>.html, with the hash taken over the query's
+        key=value pairs sorted, so their order does not matter. Cache-buster
+        keys (CACHE_BUSTER_KEYS) are left out of the hash, and a query of
+        nothing else keeps the plain name: style.css?ver=5 is style.css.
+
+        Args:
+            path: The relative path the URL maps to.
+            query: The URL's raw query string.
+
+        Returns:
+            path, with "__q<10 hex>" before the file's extension when the
+            query matters.
+        """
+        pairs = sorted(
+            (key, value)
+            for key, value in parse_qsl(query, keep_blank_values=True)
+            if key.lower() not in self.CACHE_BUSTER_KEYS
+        )
+        if not pairs:
+            return path
+        digest = hashlib.sha1(urlencode(pairs).encode("utf-8")).hexdigest()[:10]
+        directory, name = posixpath.split(path)
+        stem, ext = posixpath.splitext(name)
+        return posixpath.join(directory, f"{stem}__q{digest}{ext}")
 
     def _output_relative_url(self, path: Path) -> str:
         """
@@ -882,7 +1024,7 @@ class WaybackDownloader:
             return None
         self._cdx_lookups += 1
         try:
-            response = self.session.get(
+            response = self._wayback_get(
                 self.CDX_URL,
                 params={
                     "url": url,
@@ -928,7 +1070,7 @@ class WaybackDownloader:
             return None
         fallback_url = self._convert_to_wayback_url_with_timestamp(url, timestamp, use_iframe=is_html_page)
         try:
-            response = self.session.get(fallback_url, timeout=15, allow_redirects=True)
+            response = self._wayback_get(fallback_url, timeout=15, allow_redirects=True)
         except Exception:
             return None
         if response.status_code != 200 or self._bad_capture_reason(response):
@@ -942,23 +1084,20 @@ class WaybackDownloader:
         return self._body_of(response)
 
     def _is_corrupted_font(self, content: bytes, url: str) -> bool:
-        """Check if a downloaded font file is actually an HTML error page.
+        """True when a font file is actually an HTML page.
 
-        Wayback Machine sometimes returns HTML error pages instead of font files.
-        This detects those cases.
+        Wayback sometimes answers a font request with an HTML error page. An
+        SVG (font or image) is XML and never reads as one.
         """
-        # Check if it's a font file extension
-        font_extensions = (".woff", ".woff2", ".ttf", ".eot", ".otf", ".svg")
-        if not any(url.lower().endswith(ext) for ext in font_extensions):
+        ext = os.path.splitext(urlparse(url).path.lower())[1]
+        if ext not in (".woff", ".woff2", ".ttf", ".eot", ".otf", ".svg"):
             return False
-
-        # Check if content starts with HTML (error page)
-        # HTML typically starts with <!doctype, <html, or <HTML
-        content_start = content[:200].strip()
-        if content_start.startswith((b"<!doctype", b"<!DOCTYPE", b"<html", b"<HTML")):
+        head = content[:512].lstrip(b"\xef\xbb\xbf \t\r\n").lower()
+        if head.startswith((b"<!doctype html", b"<html")):
             return True
-
-        return False
+        # A <body> inside an SVG's <foreignObject> comes after its <svg>.
+        match = re.search(rb"<(head|body)\b", head)
+        return match is not None and b"<svg" not in head[: match.start()]
 
     def download_file(self, url: str) -> bytes | None:
         """Download a file from the given URL with timeframe fallback.
@@ -970,6 +1109,7 @@ class WaybackDownloader:
         """
         self._last_charset = None
         self._last_failure = None
+        self._last_final_url = None
         # Determine if this is an HTML page (we should NOT fallback to live for HTML)
         parsed = urlparse(url)
         # A referenced stylesheet or script, or a Google Fonts stylesheet, is
@@ -986,13 +1126,13 @@ class WaybackDownloader:
         if is_html_page:
             wayback_url_if = self._convert_to_wayback_url_with_timestamp(url, use_iframe=True)
             try:
-                response = self.session.get(wayback_url_if, timeout=15, allow_redirects=True)
+                response = self._wayback_get(wayback_url_if, timeout=15, allow_redirects=True)
                 reason = self._bad_capture_reason(response)
                 if reason:
                     return self._fetch_nearest_good_capture(url, reason, is_html_page, response)
-                if response.status_code == 429:
-                    # Still throttled after the retries; the plain URL would be too.
-                    self._last_failure = "throttled"
+                if response.status_code == 429 or response.status_code >= 500:
+                    # Still refused after the retries; the plain URL would be too.
+                    self._last_failure = "throttled" if response.status_code == 429 else "unavailable"
                     return None
                 response.raise_for_status()
                 content = self._body_of(response)
@@ -1021,8 +1161,10 @@ class WaybackDownloader:
                     except Exception:
                         # If we can't decode, assume it's good
                         return content
-            except requests.exceptions.ConnectionError:
-                self._last_failure = "connection"
+            except requests.exceptions.ConnectionError as e:
+                self._last_failure = self._connection_failure(e)
+                return None
+            except _RejectedResponse:
                 return None
             except Exception:
                 # If if_ version fails, fall through to regular download
@@ -1031,7 +1173,7 @@ class WaybackDownloader:
         # Try original timestamp first (or fallback from if_)
         wayback_url = self._convert_to_wayback_url_with_timestamp(url)
         try:
-            response = self.session.get(wayback_url, timeout=15, allow_redirects=True)
+            response = self._wayback_get(wayback_url, timeout=15, allow_redirects=True)
             reason = self._bad_capture_reason(response)
             if reason:
                 return self._fetch_nearest_good_capture(url, reason, is_html_page, response)
@@ -1055,8 +1197,12 @@ class WaybackDownloader:
                         variant_url = self._convert_to_wayback_url_with_timestamp(
                             url, timestamp, use_iframe=is_html_page
                         )
-                        variant_response = self.session.get(variant_url, timeout=10, allow_redirects=True)
-                        if variant_response.status_code == 200:
+                        variant_response = self._wayback_get(variant_url, timeout=10, allow_redirects=True)
+                        if variant_response.status_code == 429:
+                            # Throttled after the retries: the other variants would be too.
+                            self._last_failure = "throttled"
+                            break
+                        if variant_response.status_code == 200 and not self._bad_capture_reason(variant_response):
                             content = self._body_of(variant_response)
                             if self._is_corrupted_font(content, url):
                                 normalized_url = self._normalize_url(url, self.config.base_url)
@@ -1075,19 +1221,89 @@ class WaybackDownloader:
                     return self._fetch_from_live_cdn(url)
             elif e.response is not None and e.response.status_code == 429:
                 self._last_failure = "throttled"
+            elif e.response is not None and e.response.status_code >= 500:
+                self._last_failure = "unavailable"
             # Other HTTP errors - skip silently
         except requests.exceptions.Timeout as e:
-            if isinstance(e, requests.exceptions.ConnectionError):
-                self._last_failure = "connection"
+            self._last_failure = (
+                self._connection_failure(e) if isinstance(e, requests.exceptions.ConnectionError) else "unavailable"
+            )
             # Timeout on Wayback - try a well-known CDN live (only for assets)
             if not is_html_page:
                 return self._fetch_from_live_cdn(url)
-        except requests.exceptions.ConnectionError:
-            self._last_failure = "connection"
+        except requests.exceptions.ConnectionError as e:
+            self._last_failure = self._connection_failure(e)
         except Exception:
             pass
 
         return None
+
+    @staticmethod
+    def _connection_failure(error) -> str:
+        """Name a ConnectionError: a read timeout that outlived the retries
+        (urllib3 hands it over wrapped in one) is "unavailable", anything
+        else "connection"."""
+        from urllib3.exceptions import ReadTimeoutError
+
+        reason = error.args[0] if error.args else None
+        reason = getattr(reason, "reason", reason)
+        return "unavailable" if isinstance(reason, ReadTimeoutError) else "connection"
+
+    # Hosts a Wayback request may end on after its redirects.
+    WAYBACK_HOSTS = ("web.archive.org", "archive.org")
+    # No single file is read past this size.
+    MAX_BODY_BYTES = 512 * 1024 * 1024
+
+    def _pace(self) -> None:
+        """Wait REQUEST_DELAY seconds, give or take 20%, before a Wayback request."""
+        delay = getattr(self.config, "request_delay", 0.0) or 0.0
+        if delay > 0:
+            import random
+            import time
+
+            time.sleep(delay * random.uniform(0.8, 1.2))
+
+    def _wayback_get(self, url: str, **kwargs):
+        """GET from the Wayback Machine, paced, with the body read under the
+        size cap. Raises _RejectedResponse when a redirect left Wayback.
+
+        Only the final host and body are checked: requests reads each 3xx
+        hop's own body in full before this sees the final URL."""
+        self._pace()
+        response = self.session.get(url, stream=True, **kwargs)
+        final = getattr(response, "url", None)
+        if isinstance(final, str) and final and not _host_matches(final, self.WAYBACK_HOSTS):
+            response.close()
+            print(f"         ⚠️  Wayback redirected to another host, ignored: {final[:80]}", flush=True)
+            raise _RejectedResponse(final)
+        self._read_body(response)
+        return response
+
+    def _read_body(self, response) -> bytes:
+        """Read a streamed body, at most MAX_BODY_BYTES; later reads of
+        response.content get the same bytes. Raises _RejectedResponse past the
+        cap. Anything that is not a real requests.Response (a test double)
+        gives its .content."""
+        if not isinstance(response, requests.Response):
+            return response.content
+        if response._content_consumed:
+            return response.content
+        too_big = f"         ⚠️  File is larger than {self.MAX_BODY_BYTES // (1024 * 1024)} MiB, skipped"
+        length = response.headers.get("Content-Length", "")
+        if length.isdigit() and int(length) > self.MAX_BODY_BYTES:
+            response.close()
+            print(too_big, flush=True)
+            raise _RejectedResponse("body too large")
+        body = bytearray()
+        for chunk in response.iter_content(chunk_size=65536):
+            body += chunk
+            if len(body) > self.MAX_BODY_BYTES:
+                response.close()
+                print(too_big, flush=True)
+                raise _RejectedResponse("body too large")
+        response._content = bytes(body)
+        response._content_consumed = True
+        return response._content
 
     def _body_of(self, response) -> bytes:
         """The response body, remembering the charset its Content-Type named."""
@@ -1097,16 +1313,21 @@ class WaybackDownloader:
         self._last_final_url = getattr(response, "url", None)
         return response.content
 
+    # Latin-1 code points 0x80-0x9F that windows-1252 maps to other characters.
+    _CP1252_OVER_LATIN1 = {
+        b: bytes([b]).decode("cp1252") for b in range(0x80, 0xA0) if b not in (0x81, 0x8D, 0x8F, 0x90, 0x9D)
+    }
+
     def _decode_text(self, content: bytes, charset: str | None = None, is_html: bool = False) -> str:
         """
         Decode a page, stylesheet or script without dropping characters.
 
         Tries, in order: a byte order mark, UTF-8, the charset the HTTP
         response named, the document's own declaration (<meta charset>,
-        @charset), then windows-1252 with replacement characters. Valid UTF-8
-        is practically never Latin-1 text, and old servers labelled every
-        response ISO-8859-1. Old European sites are mostly ISO-8859-1 and used
-        to lose every accented letter. UTF-8 with a stray byte (a pasted
+        @charset), then windows-1252 (its five undefined bytes read as
+        Latin-1). Valid UTF-8 is practically never Latin-1 text, and old
+        servers labelled every response ISO-8859-1. Old European sites are
+        mostly ISO-8859-1 and used to lose every accented letter. UTF-8 with a stray byte (a pasted
         windows-1252 quote) stays UTF-8 and loses only that byte.
 
         Args:
@@ -1144,7 +1365,10 @@ class WaybackDownloader:
         bad = text.count("\ufffd")
         if sum(1 for c in text if c > "\x7f") - bad >= bad:
             return text
-        return data.decode("cp1252", errors="replace")
+        # windows-1252 as browsers read it: the five bytes cp1252 leaves
+        # undefined (0x81, 0x8D, 0x8F, 0x90, 0x9D) keep their Latin-1 code
+        # point instead of failing.
+        return data.decode("latin-1").translate(self._CP1252_OVER_LATIN1)
 
     @staticmethod
     def _looks_like_markup(content: bytes) -> bool:
@@ -1199,16 +1423,31 @@ class WaybackDownloader:
         """Fetch a file Wayback does not have, if it lives on a well-known CDN.
 
         Anything not on LIVE_FALLBACK_HOSTS returns None without a request.
-        Redirects are not followed, so an allowed host cannot send the request
-        anywhere else.
+        The request always goes over https to the default port (http:// is
+        upgraded, any other port refused). Redirects are not followed, so an
+        allowed host cannot send the request anywhere else.
         """
         if not _host_matches(url, self.LIVE_FALLBACK_HOSTS):
             return None
+        parsed = urlparse(url)
+        try:
+            port = parsed.port
+        except ValueError:
+            return None
+        if parsed.scheme not in ("http", "https") or port not in (None, {"http": 80, "https": 443}[parsed.scheme]):
+            return None
+        url = parsed._replace(scheme="https", netloc=parsed.hostname).geturl()
         try:
             print(f"         🔄 Wayback failed, trying CDN: {url[:80]}...", flush=True)
-            live_response = self.session.get(url, timeout=10, allow_redirects=False)
-            if live_response.status_code != 200:
+            live_response = self.session.get(url, timeout=10, allow_redirects=False, stream=True)
+            final = getattr(live_response, "url", None)
+            if isinstance(final, str) and final and not _host_matches(final, self.LIVE_FALLBACK_HOSTS):
+                live_response.close()
                 return None
+            if live_response.status_code != 200:
+                live_response.close()
+                return None
+            self._read_body(live_response)
             content = self._body_of(live_response)
         except Exception:
             return None
@@ -1238,10 +1477,10 @@ class WaybackDownloader:
             return "CSS"
         elif path.endswith(".js") or path.endswith(".mjs"):
             return "JavaScript"
-        elif any(path.endswith(ext) for ext in [".woff", ".woff2", ".ttf", ".eot", ".otf", ".svg"]):
-            return "Font"
         elif any(path.endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".ico"]):
             return "Image"
+        elif any(path.endswith(ext) for ext in [".woff", ".woff2", ".ttf", ".eot", ".otf"]):
+            return "Font"
         elif path.endswith(".json"):
             return "JSON"
         elif path.endswith(".xml"):
