@@ -356,6 +356,40 @@ class TestCorruptedFont:
         assert not dl._is_corrupted_font(body, url)
 
 
+class TestFontProbeStaysOnWayback:
+    """The probe of the fonts a stylesheet names goes through _wayback_get."""
+
+    FONT = "http://example.com/f/a.woff2"
+    CSS = "@font-face{font-family:A;src:url(/f/a.woff2) format('woff2')}"
+    HTML = b"<!DOCTYPE html><html><body>404</body></html>"
+
+    def _probe(self, dl, response):
+        dl.session.get = _Recorder(lambda url, kw: response(url))
+        dl._check_and_remove_corrupted_fonts_in_css(self.CSS, "http://example.com/s.css")
+
+    def test_an_html_answer_from_wayback_is_a_corrupted_font_and_is_removed(self, dl):
+        self._probe(dl, lambda url: _Response(200, self.HTML, url=url))
+        assert dl.corrupted_fonts == {self.FONT}
+        assert "a.woff2" not in dl._remove_corrupted_fonts_from_css(self.CSS)
+        assert all(kw.get("stream") is True for _, kw in dl.session.get.calls)
+
+    def test_an_answer_redirected_off_wayback_is_ignored(self, dl):
+        self._probe(dl, lambda url: _Response(200, self.HTML, url="https://evil.com/a.woff2"))
+        assert len(dl.session.get.calls) == 1
+        assert dl.corrupted_fonts == set()
+
+    def test_a_challenge_page_is_not_a_corrupted_font(self, dl):
+        self._probe(dl, lambda url: _Response(200, CHALLENGE, url=url))
+        assert dl.corrupted_fonts == set()
+
+    def test_the_probe_is_paced(self, dl, monkeypatch):
+        sleeps = []
+        monkeypatch.setattr(time, "sleep", sleeps.append)
+        dl.config.request_delay = 1.0
+        self._probe(dl, lambda url: _Response(200, b"wOF2", url=url))
+        assert len(sleeps) == 1
+
+
 def test_a_byte_cp1252_leaves_undefined_is_kept(dl):
     data = b"Caf\xe9 \x93hi\x94 \x81 end"
     with pytest.raises(UnicodeDecodeError):

@@ -1559,11 +1559,13 @@ class WaybackDownloader:
                 continue
             self._probed_fonts.add(font_url)
 
-            # Try to download and check if corrupted (with quick timeout)
+            # Try to download and check if corrupted (with quick timeout).
+            # _wayback_get applies the guards every Wayback fetch has; an
+            # answer it rejects, like a bad capture, says nothing about the font.
             try:
                 wayback_url = self._convert_to_wayback_url_with_timestamp(font_url)
-                response = self.session.get(wayback_url, timeout=5, allow_redirects=True)
-                if response.status_code == 200:
+                response = self._wayback_get(wayback_url, timeout=5, allow_redirects=True)
+                if response.status_code == 200 and not self._bad_capture_reason(response):
                     if self._is_corrupted_font(response.content, font_url):
                         self.corrupted_fonts.add(font_url)
                         print(f"         ⚠️  Detected corrupted font in CSS: {os.path.basename(font_url)}", flush=True)
