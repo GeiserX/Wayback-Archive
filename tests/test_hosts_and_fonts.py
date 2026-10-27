@@ -159,7 +159,8 @@ class TestWwwIsAPrefixNotACharacterSet:
         }
         calls, out = _archive(dl, pages)
         assert sorted(calls) == sorted(pages)
-        assert "Files skipped (duplicates): 0" in out
+        # Each later link to a known page is a duplicate: 1 on the home page, 3 on each other.
+        assert "Files skipped (duplicates): 7" in out
 
 
 class TestCssOnlyQueuesRealGoogleFonts:
