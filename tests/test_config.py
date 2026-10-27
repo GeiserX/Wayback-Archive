@@ -15,7 +15,7 @@ class TestConfig:
         os.environ.pop("WAYBACK_URL", None)
         config = Config()
 
-        assert config.optimize_html is True
+        assert config.optimize_html is False
         assert config.optimize_images is False
         assert config.minify_js is False
         assert config.minify_css is False
@@ -103,9 +103,9 @@ class TestStrictValues:
         assert "REMOVE_TRACKERS" in error and "'flase'" in error
 
     def test_empty_boolean_means_the_default(self, monkeypatch):
-        monkeypatch.setenv("OPTIMIZE_HTML", "")
+        monkeypatch.setenv("REMOVE_TRACKERS", "")
         config = Config()
-        assert config.optimize_html is True
+        assert config.remove_trackers is True
         assert config.errors == []
 
     def test_empty_output_dir_means_the_default(self, monkeypatch):

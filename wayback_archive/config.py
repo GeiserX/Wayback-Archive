@@ -29,7 +29,7 @@ class Config:
 
     # (attribute, environment variable, default) of every on/off option.
     BOOL_OPTIONS = (
-        ("optimize_html", "OPTIMIZE_HTML", True),
+        ("optimize_html", "OPTIMIZE_HTML", False),  # opt-in: minifying drops spaces that render between inline elements
         ("optimize_images", "OPTIMIZE_IMAGES", False),
         ("minify_js", "MINIFY_JS", False),
         ("minify_css", "MINIFY_CSS", False),
