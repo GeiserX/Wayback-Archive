@@ -6,7 +6,7 @@
 - `wayback_archive/config.py`: every setting, read from environment variables (`WAYBACK_URL`, `OUTPUT_DIR`, `MAX_FILES`, ...).
 - `wayback_archive/downloader.py`: everything else, in `WaybackDownloader`. The crawl loop is `download()` (a queue of URLs, each fetched through `_crawl_url()` and `download_file()`); the rewriting of saved files is `_process_html()` for pages and `_rewrite_css_urls()` for stylesheets; where a file lands on disk is `_get_local_path()`.
 - `tests/`: pytest. `tests/conftest.py` has an autouse guard that refuses every connection that is not to localhost, so a test needs mocked responses or a local server.
-- `docs/`: the MkDocs site, built with `--strict`, so a broken link or a page missing from `nav` in `mkdocs.yml` fails CI.
+- `docs/`: the Zensical site (`zensical.toml`), built with `--strict` and checked by `.github/scripts/site-check.py`, so a broken link or a page missing from `nav` in `zensical.toml` fails CI.
 
 Lint, format and test exactly as CI does:
 

@@ -46,3 +46,12 @@ updates:
       - dependency-name: '*'
         update-types:
           - version-update:semver-major
+  - package-ecosystem: pip
+    directory: /docs
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: build(docs)
+    labels:
+      - documentation
+      - automated

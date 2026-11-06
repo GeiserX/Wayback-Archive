@@ -37,13 +37,18 @@ To build the image the release publishes: `docker build -t wayback-archive .`
 
 ## Docs
 
-The site under `docs/` is MkDocs in strict mode, so a broken link or a page
-missing from the navigation fails the build:
+The site under `docs/` is built with Zensical from `zensical.toml`, which needs
+Python 3.11 or newer (the tool itself supports 3.10). CI runs a strict build
+and then `site-check.py`, so a broken link or a page missing from the
+navigation fails the check:
 
 ```bash
 pip install -r docs/requirements-docs.txt
-mkdocs serve
+python -m zensical build --clean --strict
+python -I .github/scripts/site-check.py site
 ```
+
+`python -m zensical serve` previews the site while you edit.
 
 ## Cutting a release
 
