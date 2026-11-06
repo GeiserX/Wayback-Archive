@@ -37,9 +37,10 @@ To build the image the release publishes: `docker build -t wayback-archive .`
 
 ## Docs
 
-The site under `docs/` is built with Zensical from `zensical.toml`. CI runs a
-strict build and then `site-check.py`, so a broken link or a page missing from
-the navigation fails the check:
+The site under `docs/` is built with Zensical from `zensical.toml`, which needs
+Python 3.11 or newer (the tool itself supports 3.10). CI runs a strict build
+and then `site-check.py`, so a broken link or a page missing from the
+navigation fails the check:
 
 ```bash
 pip install -r docs/requirements-docs.txt

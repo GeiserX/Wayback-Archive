@@ -28,7 +28,7 @@ CI runs the suite on Python 3.10 to 3.14 on Linux, and on Python 3.13 on Windows
 
 ## Docs
 
-The site is built with [Zensical](https://zensical.org/) from `docs/` and `zensical.toml`:
+The site is built with [Zensical](https://zensical.org/) from `docs/` and `zensical.toml`. Zensical needs Python 3.11 or newer, one version above the 3.10 the tool itself supports; CI builds the site on 3.13.
 
 ```bash
 pip install -r docs/requirements-docs.txt
@@ -36,7 +36,7 @@ python -m zensical build --clean --strict
 python -I .github/scripts/site-check.py site
 ```
 
-The `Docs` workflow runs the same two steps on every pull request and deploys `main` to GitHub Pages. The strict build fails on a broken link or anchor; `site-check.py` fails on what the build lets through: a page left out of the nav, a nav entry for a missing file, a missing image, a link rooted at `/`. `python -m zensical serve` previews the site while you edit.
+The `Docs` workflow runs the same two steps on every pull request and deploys `main` to GitHub Pages. The strict build fails on a broken link or anchor inside the site (links to other sites are not fetched); `site-check.py` fails on what the build lets through: a page left out of the nav, a nav entry for a missing file, a missing image, a link rooted at `/`. `python -m zensical serve` previews the site while you edit.
 
 ## Docker image
 
